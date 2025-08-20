@@ -1,0 +1,358 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: model-update-listener
+  namespace: ic-shared-rag-llm
+  labels:
+    app: model-deployment-trigger
+spec:
+  serviceAccountName: tekton-triggers-sa
+  triggers:
+  - name: model-upload-trigger
+    interceptors:
+    - name: "verify-model-upload"
+      ref:
+        name: "cel"
+      params:
+      - name: "filter"
+        value: "body.action == 'model_uploaded' || body.event_type == 'model_ready'"
+    bindings:
+    - ref: model-deployment-binding
+    template:
+      ref: model-deployment-template
+
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: model-deployment-binding
+  namespace: ic-shared-rag-llm
+spec:
+  params:
+  - name: model-name
+    value: $(body.model_name)
+  - name: model-version
+    value: $(body.model_version)
+  - name: model-path
+    value: $(body.model_path)
+  - name: git-repo-url
+    value: $(body.git_repo_url)
+
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: model-deployment-template
+  namespace: ic-shared-rag-llm
+spec:
+  params:
+  - name: model-name
+    description: Name of the model to deploy
+    default: "ml-model"
+  - name: model-version
+    description: Version of the model
+    default: "v1"
+  - name: model-path
+    description: Path to the model file
+    default: "/tmp/models/best_model.pkl"
+  - name: git-repo-url
+    description: Git repository URL
+    default: "https://github.com/riteshshah/ml_pipelines.git"
+  resourcetemplates:
+  - apiVersion: tekton.dev/v1beta1
+    kind: PipelineRun
+    metadata:
+      generateName: model-deployment-run-
+      namespace: ic-shared-rag-llm
+      labels:
+        app: model-deployment
+        model: $(tt.params.model-name)
+    spec:
+      pipelineRef:
+        name: model-deployment-pipeline
+      params:
+      - name: model-name
+        value: $(tt.params.model-name)
+      - name: model-version
+        value: $(tt.params.model-version)
+      - name: model-path
+        value: $(tt.params.model-path)
+      - name: git-repo-url
+        value: $(tt.params.git-repo-url)
+      workspaces:
+      - name: model-artifacts
+        persistentVolumeClaim:
+          claimName: model-artifacts-pvc
+      - name: git-source
+        volumeClaimTemplate:
+          spec:
+            accessModes:
+            - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-triggers-sa
+  namespace: ic-shared-rag-llm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tekton-triggers-role
+  namespace: ic-shared-rag-llm
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets", "services"]
+  verbs: ["get", "list", "create", "update", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "create", "update", "delete"]
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list", "create", "update", "delete"]
+- apiGroups: ["tekton.dev"]
+  resources: ["pipelineruns", "taskruns"]
+  verbs: ["get", "list", "create", "update", "delete"]
+- apiGroups: ["triggers.tekton.dev"]
+  resources: ["eventlisteners", "triggerbindings", "triggertemplates"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-triggers-binding
+  namespace: ic-shared-rag-llm
+subjects:
+- kind: ServiceAccount
+  name: tekton-triggers-sa
+  namespace: ic-shared-rag-llm
+roleRef:
+  kind: Role
+  name: tekton-triggers-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: el-model-update-listener
+  namespace: ic-shared-rag-llm
+  labels:
+    app: model-deployment-trigger
+spec:
+  selector:
+    eventlistener: model-update-listener
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: model-trigger-webhook
+  namespace: ic-shared-rag-llm
+  labels:
+    app: model-deployment-trigger
+spec:
+  to:
+    kind: Service
+    name: el-model-update-listener
+    weight: 100
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+---
+# Custom Task to trigger the pipeline when Elyra upload-model task completes
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: elyra-model-watcher-task
+  namespace: ic-shared-rag-llm
+spec:
+  description: Watches for Elyra pipeline completion and triggers model deployment
+  params:
+  - name: elyra-pipeline-name
+    type: string
+    description: Name of the Elyra pipeline to watch
+    default: "02-model-training-v2"
+  - name: model-name
+    type: string
+    description: Name of the model
+    default: "elyra-ml-model"
+  - name: check-interval
+    type: string
+    description: Interval to check pipeline status (in seconds)
+    default: "30"
+  steps:
+  - name: watch-elyra-pipeline
+    image: quay.io/openshift/origin-cli:latest
+    script: |
+      #!/bin/bash
+      set -e
+      
+      ELYRA_PIPELINE="$(params.elyra-pipeline-name)"
+      MODEL_NAME="$(params.model-name)"
+      CHECK_INTERVAL="$(params.check-interval)"
+      NAMESPACE="ic-shared-rag-llm"
+      
+      echo "Starting Elyra pipeline watcher for: ${ELYRA_PIPELINE}"
+      echo "Model name: ${MODEL_NAME}"
+      echo "Check interval: ${CHECK_INTERVAL} seconds"
+      
+      # Function to check if Elyra pipeline completed successfully
+      check_elyra_pipeline() {
+          # Check for successful Elyra pipeline runs
+          SUCCESSFUL_RUNS=$(oc get workflows -n ${NAMESPACE} \
+              --selector=pipelines.kubeflow.org/pipeline-name=${ELYRA_PIPELINE} \
+              --output=jsonpath='{.items[?(@.status.phase=="Succeeded")].metadata.name}' | wc -w)
+          
+          if [ "$SUCCESSFUL_RUNS" -gt 0 ]; then
+              echo "Found successful Elyra pipeline run!"
+              return 0
+          else
+              echo "No successful runs found yet..."
+              return 1
+          fi
+      }
+      
+      # Function to trigger model deployment
+      trigger_deployment() {
+          echo "Triggering model deployment pipeline..."
+          
+          # Get the webhook URL
+          WEBHOOK_URL=$(oc get route model-trigger-webhook -n ${NAMESPACE} -o jsonpath='{.spec.host}')
+          
+          # Prepare payload
+          PAYLOAD=$(cat <<EOF
+      {
+          "action": "model_uploaded",
+          "event_type": "model_ready",
+          "model_name": "${MODEL_NAME}",
+          "model_version": "v$(date +%Y%m%d%H%M%S)",
+          "model_path": "/tmp/models/best_model.pkl",
+          "git_repo_url": "https://github.com/riteshshah/ml_pipelines.git",
+          "timestamp": "$(date -Iseconds)",
+          "source": "elyra-pipeline-watcher"
+      }
+      EOF
+      )
+          
+          echo "Sending webhook to: https://${WEBHOOK_URL}"
+          echo "Payload: ${PAYLOAD}"
+          
+          # Send webhook
+          curl -X POST "https://${WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "Ce-Specversion: 1.0" \
+              -H "Ce-Type: model.uploaded" \
+              -H "Ce-Source: elyra-watcher" \
+              -H "Ce-Id: $(uuidgen)" \
+              -d "${PAYLOAD}" \
+              --insecure
+          
+          echo "Webhook sent successfully!"
+      }
+      
+      # Main monitoring loop
+      echo "Starting monitoring loop..."
+      LAST_CHECK_TIME=0
+      
+      while true; do
+          CURRENT_TIME=$(date +%s)
+          
+          if [ $((CURRENT_TIME - LAST_CHECK_TIME)) -ge ${CHECK_INTERVAL} ]; then
+              echo "Checking Elyra pipeline status at $(date)"
+              
+              if check_elyra_pipeline; then
+                  echo "Elyra pipeline completed successfully! Triggering deployment..."
+                  trigger_deployment
+                  echo "Deployment triggered. Exiting watcher."
+                  break
+              fi
+              
+              LAST_CHECK_TIME=${CURRENT_TIME}
+          fi
+          
+          sleep 10
+      done
+      
+      echo "Elyra model watcher completed successfully!"
+
+---
+# CronJob to periodically check for new model uploads
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: elyra-model-deployment-scheduler
+  namespace: ic-shared-rag-llm
+  labels:
+    app: model-deployment-scheduler
+spec:
+  schedule: "*/10 * * * *"  # Check every 10 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: tekton-triggers-sa
+          containers:
+          - name: model-checker
+            image: quay.io/openshift/origin-cli:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              #!/bin/bash
+              set -e
+              
+              NAMESPACE="ic-shared-rag-llm"
+              echo "Checking for new model uploads at $(date)"
+              
+              # Check for recent successful Elyra pipeline runs (last 15 minutes)
+              RECENT_RUNS=$(oc get workflows -n ${NAMESPACE} \
+                  --selector=pipelines.kubeflow.org/pipeline-name \
+                  -o jsonpath='{range .items[?(@.status.phase=="Succeeded")]}{.metadata.name}{" "}{.status.finishedAt}{"\n"}{end}' | \
+                  awk -v cutoff="$(date -d '15 minutes ago' -Iseconds)" '$2 > cutoff {print $1}')
+              
+              if [ -n "$RECENT_RUNS" ]; then
+                  echo "Found recent successful pipeline runs:"
+                  echo "$RECENT_RUNS"
+                  
+                  # Trigger deployment for the most recent run
+                  WEBHOOK_URL=$(oc get route model-trigger-webhook -n ${NAMESPACE} -o jsonpath='{.spec.host}')
+                  
+                  PAYLOAD=$(cat <<EOF
+              {
+                  "action": "model_uploaded",
+                  "event_type": "model_ready",
+                  "model_name": "elyra-scheduled-model",
+                  "model_version": "v$(date +%Y%m%d%H%M%S)",
+                  "model_path": "/tmp/models/best_model.pkl",
+                  "git_repo_url": "https://github.com/riteshshah/ml_pipelines.git",
+                  "timestamp": "$(date -Iseconds)",
+                  "source": "scheduled-checker"
+              }
+              EOF
+              )
+                  
+                  echo "Triggering deployment via webhook..."
+                  curl -X POST "https://${WEBHOOK_URL}" \
+                      -H "Content-Type: application/json" \
+                      -d "${PAYLOAD}" \
+                      --insecure
+                  
+                  echo "Deployment triggered successfully!"
+              else
+                  echo "No recent model uploads found."
+              fi
+          restartPolicy: OnFailure

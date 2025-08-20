@@ -1,0 +1,498 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: s3-model-update-listener
+  namespace: ic-shared-rag-llm
+  labels:
+    app: s3-model-deployment-trigger
+spec:
+  serviceAccountName: tekton-triggers-sa
+  triggers:
+  - name: s3-model-upload-trigger
+    interceptors:
+    - name: "verify-s3-model-upload"
+      ref:
+        name: "cel"
+      params:
+      - name: "filter"
+        value: "body.action == 's3_model_uploaded' || body.event_type == 's3_model_ready' || body.trigger_source == 'elyra_pipeline_complete'"
+    bindings:
+    - ref: s3-model-deployment-binding
+    template:
+      ref: s3-model-deployment-template
+
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: s3-model-deployment-binding
+  namespace: ic-shared-rag-llm
+spec:
+  params:
+  - name: model-name
+    value: $(body.model_name)
+  - name: model-version
+    value: $(body.model_version)
+  - name: s3-model-path
+    value: $(body.s3_model_path)
+  - name: namespace
+    value: $(body.namespace)
+
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: s3-model-deployment-template
+  namespace: ic-shared-rag-llm
+spec:
+  params:
+  - name: model-name
+    description: Name of the model to deploy
+    default: "cats-and-dogs"
+  - name: model-version
+    description: Version of the model
+    default: "v1"
+  - name: s3-model-path
+    description: S3 path to the model files
+    default: "pipeline-artifacts/02_model_training/models/cats_and_dogs"
+  - name: namespace
+    description: Target namespace
+    default: "ic-shared-rag-llm"
+  resourcetemplates:
+  - apiVersion: tekton.dev/v1beta1
+    kind: PipelineRun
+    metadata:
+      generateName: s3-model-deployment-run-
+      namespace: ic-shared-rag-llm
+      labels:
+        app: s3-model-deployment
+        model: $(tt.params.model-name)
+        trigger-source: s3-webhook
+    spec:
+      pipelineRef:
+        name: s3-model-deployment-pipeline
+      params:
+      - name: model-name
+        value: $(tt.params.model-name)
+      - name: model-version
+        value: $(tt.params.model-version)
+      - name: s3-model-path
+        value: $(tt.params.s3-model-path)
+      - name: namespace
+        value: $(tt.params.namespace)
+      workspaces:
+      - name: model-storage
+        volumeClaimTemplate:
+          spec:
+            accessModes:
+            - ReadWriteOnce
+            resources:
+              requests:
+                storage: 5Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: el-s3-model-update-listener
+  namespace: ic-shared-rag-llm
+  labels:
+    app: s3-model-deployment-trigger
+spec:
+  selector:
+    eventlistener: s3-model-update-listener
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: s3-model-trigger-webhook
+  namespace: ic-shared-rag-llm
+  labels:
+    app: s3-model-deployment-trigger
+spec:
+  to:
+    kind: Service
+    name: el-s3-model-update-listener
+    weight: 100
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+---
+# Enhanced S3 Model Watcher that monitors the specific S3 path
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: s3-model-watcher-task
+  namespace: ic-shared-rag-llm
+spec:
+  description: Monitors S3 location for cats_and_dogs model updates and triggers deployment
+  params:
+  - name: s3-model-path
+    type: string
+    description: S3 path to monitor
+    default: "pipeline-artifacts/02_model_training/models/cats_and_dogs"
+  - name: model-name
+    type: string
+    description: Name of the model
+    default: "cats-and-dogs"
+  - name: check-interval
+    type: string
+    description: Interval to check S3 (in seconds)
+    default: "60"
+  - name: namespace
+    type: string
+    description: Namespace for deployment
+    default: "ic-shared-rag-llm"
+  steps:
+  - name: monitor-s3-model
+    image: quay.io/opendatahub/workbench-images:jupyter-datascience-ubi9-python-3.9-2023b-20231016
+    env:
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom:
+        secretKeyRef:
+          name: aws-shared-rag-connection
+          key: AWS_ACCESS_KEY_ID
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom:
+        secretKeyRef:
+          name: aws-shared-rag-connection
+          key: AWS_SECRET_ACCESS_KEY
+    - name: AWS_DEFAULT_REGION
+      valueFrom:
+        secretKeyRef:
+          name: aws-shared-rag-connection
+          key: AWS_DEFAULT_REGION
+    - name: AWS_S3_ENDPOINT
+      valueFrom:
+        secretKeyRef:
+          name: aws-shared-rag-connection
+          key: AWS_S3_ENDPOINT
+    - name: AWS_S3_BUCKET
+      valueFrom:
+        secretKeyRef:
+          name: aws-shared-rag-connection
+          key: AWS_S3_BUCKET
+    script: |
+      #!/usr/bin/env python3
+      import os
+      import boto3
+      import json
+      import time
+      import requests
+      from datetime import datetime, timedelta
+      from botocore.client import Config
+      
+      print("Starting S3 model watcher...")
+      print(f"Monitoring S3 path: $(params.s3-model-path)")
+      print(f"Model name: $(params.model-name)")
+      print(f"Check interval: $(params.check-interval) seconds")
+      
+      # S3 configuration
+      aws_access_key = os.environ['AWS_ACCESS_KEY_ID']
+      aws_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
+      aws_region = os.environ['AWS_DEFAULT_REGION']
+      s3_endpoint = os.environ['AWS_S3_ENDPOINT']
+      s3_bucket = os.environ['AWS_S3_BUCKET']
+      
+      # Create S3 client
+      s3_client = boto3.client(
+          's3',
+          endpoint_url=f'https://{s3_endpoint}',
+          aws_access_key_id=aws_access_key,
+          aws_secret_access_key=aws_secret_key,
+          region_name=aws_region,
+          config=Config(signature_version='s3v4')
+      )
+      
+      model_path = "$(params.s3-model-path)"
+      model_name = "$(params.model-name)"
+      check_interval = int("$(params.check-interval)")
+      namespace = "$(params.namespace)"
+      
+      def check_model_files():
+          """Check if model files exist and get their last modified times"""
+          try:
+              model_files = ['models.bin', 'models.xml']
+              file_info = {}
+              
+              for file_name in model_files:
+                  s3_key = f"{model_path}/{file_name}"
+                  
+                  try:
+                      response = s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
+                      last_modified = response['LastModified']
+                      file_size = response['ContentLength']
+                      
+                      file_info[file_name] = {
+                          'last_modified': last_modified,
+                          'size': file_size,
+                          'exists': True
+                      }
+                      print(f"✓ Found {file_name}: {file_size} bytes, modified {last_modified}")
+                      
+                  except Exception as e:
+                      print(f"✗ {file_name} not found: {str(e)}")
+                      file_info[file_name] = {'exists': False}
+              
+              return file_info
+              
+          except Exception as e:
+              print(f"Error checking S3: {str(e)}")
+              return {}
+      
+      def trigger_deployment():
+          """Trigger the model deployment pipeline"""
+          try:
+              # Get webhook URL
+              webhook_url = "http://el-s3-model-update-listener.ic-shared-rag-llm.svc.cluster.local:8080"
+              
+              # Prepare payload
+              payload = {
+                  "action": "s3_model_uploaded",
+                  "event_type": "s3_model_ready",
+                  "trigger_source": "s3_model_watcher",
+                  "model_name": model_name,
+                  "model_version": f"v{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                  "s3_model_path": model_path,
+                  "namespace": namespace,
+                  "timestamp": datetime.now().isoformat(),
+                  "s3_bucket": s3_bucket,
+                  "s3_endpoint": s3_endpoint
+              }
+              
+              print(f"Triggering deployment with payload: {json.dumps(payload, indent=2)}")
+              
+              # Send webhook
+              response = requests.post(
+                  webhook_url,
+                  json=payload,
+                  headers={
+                      "Content-Type": "application/json",
+                      "Ce-Specversion": "1.0",
+                      "Ce-Type": "s3.model.uploaded",
+                      "Ce-Source": "s3-model-watcher",
+                      "Ce-Id": f"s3-model-{int(time.time())}"
+                  },
+                  timeout=30
+              )
+              
+              if response.status_code == 200:
+                  print("✓ Deployment triggered successfully!")
+                  return True
+              else:
+                  print(f"✗ Webhook failed: {response.status_code} - {response.text}")
+                  return False
+                  
+          except Exception as e:
+              print(f"Error triggering deployment: {str(e)}")
+              return False
+      
+      # Main monitoring loop
+      print("Starting monitoring loop...")
+      last_check_time = None
+      
+      # Store the path to track if we've already processed this model
+      state_file = f"/tmp/{model_name}_last_deployment.json"
+      
+      while True:
+          print(f"Checking S3 at {datetime.now()}")
+          
+          file_info = check_model_files()
+          
+          if file_info and all(info.get('exists', False) for info in file_info.values()):
+              print("Both model files found!")
+              
+              # Check if this is a new/updated model
+              should_deploy = False
+              
+              if os.path.exists(state_file):
+                  try:
+                      with open(state_file, 'r') as f:
+                          last_state = json.load(f)
+                      
+                      # Compare file modification times
+                      for file_name, info in file_info.items():
+                          if info['exists']:
+                              current_modified = info['last_modified'].isoformat()
+                              last_modified = last_state.get(file_name, {}).get('last_modified', '')
+                              
+                              if current_modified != last_modified:
+                                  print(f"File {file_name} has been updated!")
+                                  should_deploy = True
+                                  break
+                  except Exception as e:
+                      print(f"Error reading state file: {str(e)}")
+                      should_deploy = True
+              else:
+                  print("No previous state found, treating as new model")
+                  should_deploy = True
+              
+              if should_deploy:
+                  print("Triggering model deployment...")
+                  
+                  if trigger_deployment():
+                      # Update state file
+                      current_state = {}
+                      for file_name, info in file_info.items():
+                          if info['exists']:
+                              current_state[file_name] = {
+                                  'last_modified': info['last_modified'].isoformat(),
+                                  'size': info['size']
+                              }
+                      
+                      current_state['last_deployment'] = datetime.now().isoformat()
+                      
+                      with open(state_file, 'w') as f:
+                          json.dump(current_state, f, indent=2)
+                      
+                      print("Model deployment triggered and state updated!")
+                      print("S3 model watcher completed successfully!")
+                      break
+                  else:
+                      print("Failed to trigger deployment, will retry...")
+              else:
+                  print("No model updates detected")
+          else:
+              print("Model files not ready yet")
+          
+          print(f"Waiting {check_interval} seconds before next check...")
+          time.sleep(check_interval)
+
+---
+# CronJob to periodically check S3 for model updates
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: s3-cats-dogs-model-checker
+  namespace: ic-shared-rag-llm
+  labels:
+    app: s3-model-deployment-scheduler
+    model: cats-and-dogs
+spec:
+  schedule: "*/5 * * * *"  # Check every 5 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: tekton-triggers-sa
+          containers:
+          - name: s3-model-checker
+            image: quay.io/opendatahub/workbench-images:jupyter-datascience-ubi9-python-3.9-2023b-20231016
+            env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-shared-rag-connection
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-shared-rag-connection
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_DEFAULT_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: aws-shared-rag-connection
+                  key: AWS_DEFAULT_REGION
+            - name: AWS_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: aws-shared-rag-connection
+                  key: AWS_S3_ENDPOINT
+            - name: AWS_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: aws-shared-rag-connection
+                  key: AWS_S3_BUCKET
+            command:
+            - /bin/bash
+            - -c
+            - |
+              #!/bin/bash
+              set -e
+              
+              echo "S3 Cats & Dogs Model Checker - $(date)"
+              
+              # Run Python script to check S3 and trigger deployment if needed
+              python3 -c "
+              import os
+              import boto3
+              import json
+              import requests
+              from datetime import datetime, timedelta
+              from botocore.client import Config
+              
+              # S3 configuration
+              aws_access_key = os.environ['AWS_ACCESS_KEY_ID']
+              aws_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
+              aws_region = os.environ['AWS_DEFAULT_REGION']
+              s3_endpoint = os.environ['AWS_S3_ENDPOINT']
+              s3_bucket = os.environ['AWS_S3_BUCKET']
+              
+              s3_client = boto3.client(
+                  's3',
+                  endpoint_url=f'https://{s3_endpoint}',
+                  aws_access_key_id=aws_access_key,
+                  aws_secret_access_key=aws_secret_key,
+                  region_name=aws_region,
+                  config=Config(signature_version='s3v4')
+              )
+              
+              model_path = 'pipeline-artifacts/02_model_training/models/cats_and_dogs'
+              model_files = ['models.bin', 'models.xml']
+              
+              print(f'Checking S3 path: {model_path}')
+              
+              # Check if files exist and are recent (within last hour)
+              recent_files = []
+              cutoff_time = datetime.now() - timedelta(minutes=30)
+              
+              for file_name in model_files:
+                  s3_key = f'{model_path}/{file_name}'
+                  try:
+                      response = s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
+                      last_modified = response['LastModified'].replace(tzinfo=None)
+                      
+                      if last_modified > cutoff_time:
+                          recent_files.append(file_name)
+                          print(f'Recent file found: {file_name} (modified: {last_modified})')
+                  except Exception as e:
+                      print(f'File {file_name} not found: {str(e)}')
+              
+              if len(recent_files) >= 2:
+                  print('Recent model files detected, triggering deployment...')
+                  
+                  # Trigger deployment
+                  webhook_url = 'http://el-s3-model-update-listener.ic-shared-rag-llm.svc.cluster.local:8080'
+                  payload = {
+                      'action': 's3_model_uploaded',
+                      'event_type': 's3_model_ready',
+                      'trigger_source': 'scheduled_checker',
+                      'model_name': 'cats-and-dogs',
+                      'model_version': f'v{datetime.now().strftime(\"%Y%m%d%H%M%S\")}',
+                      's3_model_path': model_path,
+                      'namespace': 'ic-shared-rag-llm',
+                      'timestamp': datetime.now().isoformat()
+                  }
+                  
+                  try:
+                      response = requests.post(webhook_url, json=payload, timeout=30)
+                      if response.status_code == 200:
+                          print('Deployment triggered successfully!')
+                      else:
+                          print(f'Webhook failed: {response.status_code}')
+                  except Exception as e:
+                      print(f'Error sending webhook: {str(e)}')
+              else:
+                  print('No recent model updates found.')
+              "
+          restartPolicy: OnFailure
