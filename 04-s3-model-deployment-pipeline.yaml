@@ -156,24 +156,31 @@ spec:
       # Remove bucket name from path since we set it separately
       s3_path = s3_path_param.replace("pipeline-artifacts/", "")
       
-      # Use /tmp as it's writable, then copy to workspace
-      temp_model_dir = "/tmp/models/" + model_name
+      # Use the shared workspace directory
       local_model_dir = "/workspace/model-storage/" + model_name
       
-      # Create temp directory
+      # Create model directory in workspace
       import stat
-      os.makedirs("/tmp/models", mode=0o755, exist_ok=True)
-      os.makedirs(temp_model_dir, mode=0o755, exist_ok=True)
+      import subprocess
       
-      # Try to create workspace directory, but don't fail if it's read-only
+      # Check workspace permissions and create directory
+      print("Checking workspace permissions...")
       try:
-          os.makedirs("/workspace/model-storage", mode=0o755, exist_ok=True)
+          # First ensure the parent directory exists
+          subprocess.run(["mkdir", "-p", "/workspace/model-storage"], check=True)
+          subprocess.run(["chmod", "755", "/workspace/model-storage"], check=False)
+          
+          # Create model directory
+          subprocess.run(["mkdir", "-p", local_model_dir], check=True)
+          subprocess.run(["chmod", "755", local_model_dir], check=False)
+          
+          print("Workspace directory created successfully")
+      except subprocess.CalledProcessError as e:
+          print("Error creating workspace directory:", str(e))
+          # Fallback to current working directory
+          local_model_dir = "./" + model_name
           os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
-          use_workspace = True
-      except OSError as e:
-          print("Workspace is read-only, using temp directory:", str(e))
-          local_model_dir = temp_model_dir
-          use_workspace = False
+          print("Using fallback directory:", local_model_dir)
       
       print("Local model directory:", local_model_dir)
       print("Adjusted S3 path:", s3_path)
@@ -258,29 +265,18 @@ spec:
       with open(metadata_path, 'w') as f:
           json.dump(metadata, f, indent=2)
       
-      # Copy files to workspace if we used temp directory
-      if not use_workspace and os.path.exists("/workspace/model-storage"):
-          try:
-              import shutil
-              workspace_model_dir = "/workspace/model-storage/" + model_name
-              print("Copying files from temp to workspace...")
-              shutil.copytree(local_model_dir, workspace_model_dir, dirs_exist_ok=True)
-              print("Files copied to workspace successfully")
-          except Exception as e:
-              print("Could not copy to workspace:", str(e))
-              print("Files remain in temp directory:", local_model_dir)
-      
       print("Model download completed successfully!")
       print("Downloaded files:", downloaded_files)
       print("Local files:", os.listdir(local_model_dir))
       print("Metadata saved to:", metadata_path)
       
-      # List workspace contents if accessible
-      if os.path.exists("/workspace/model-storage"):
-          try:
-              print("Workspace contents:", os.listdir("/workspace/model-storage"))
-          except Exception as e:
-              print("Cannot list workspace:", str(e))
+      # List workspace contents
+      try:
+          print("Workspace model-storage contents:", os.listdir("/workspace/model-storage"))
+          if os.path.exists("/workspace/model-storage/" + model_name):
+              print("Model directory contents:", os.listdir("/workspace/model-storage/" + model_name))
+      except Exception as e:
+          print("Cannot list workspace:", str(e))
 
 ---
 apiVersion: tekton.dev/v1beta1
@@ -315,17 +311,37 @@ spec:
       echo "Deploying ${MODEL_NAME}:${MODEL_VERSION} to OpenShift AI..."
       echo "Model directory: ${MODEL_DIR}"
       
-      # Check if model files exist in workspace, otherwise use temp
+      # Check if model files exist in workspace
+      echo "Checking for model files in workspace..."
+      ls -la "/workspace/model-storage/" || echo "Cannot list workspace root"
+      
       if [ -d "${MODEL_DIR}" ] && [ "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
-          echo "Using model files from workspace:"
-          ls -la "${MODEL_DIR}"
-      elif [ -d "/tmp/models/${MODEL_NAME}" ] && [ "$(ls -A /tmp/models/${MODEL_NAME} 2>/dev/null)" ]; then
-          echo "Model files not found in workspace, using temp directory:"
-          MODEL_DIR="/tmp/models/${MODEL_NAME}"
+          echo "Found model files in workspace:"
           ls -la "${MODEL_DIR}"
       else
-          echo "Error: No model files found in workspace or temp directory"
-          exit 1
+          echo "Model files not found in expected location: ${MODEL_DIR}"
+          echo "Checking if model files exist elsewhere in workspace..."
+          find /workspace/model-storage -name "*.bin" -o -name "*.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
+          
+          # Try to find any directory with model files
+          for dir in /workspace/model-storage/*/; do
+              if [ -d "$dir" ] && [ "$(ls -A "$dir" 2>/dev/null)" ]; then
+                  echo "Found files in directory: $dir"
+                  ls -la "$dir"
+                  if [ -f "$dir/metadata.json" ] || [ -f "$dir/models.bin" ] || [ -f "$dir/models.xml" ]; then
+                      echo "Using model files from: $dir"
+                      MODEL_DIR="$dir"
+                      break
+                  fi
+              fi
+          done
+          
+          # Final check
+          if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
+              echo "Error: No model files found in workspace"
+              echo "Expected location: ${MODEL_DIR}"
+              exit 1
+          fi
       fi
       
       # Create ConfigMap with model files

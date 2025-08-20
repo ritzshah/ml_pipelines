@@ -25,7 +25,8 @@ The system automatically monitors S3 storage for model updates and triggers depl
 ## Components
 
 ### 1. S3 Model Storage
-- **Location**: `pipeline-artifacts/02_model_training/models/cats_and_dogs`
+- **Bucket**: `pipeline-artifacts`
+- **Path**: `02_model_training/models/cats_and_dogs`
 - **Files**: `models.bin`, `models.xml` (OpenVINO IR format)
 - **Secret**: `aws-shared-rag-connection` (pre-configured S3 credentials)
 
@@ -91,7 +92,7 @@ curl -X POST "https://${WEBHOOK_URL}" \
     "action": "s3_model_uploaded",
     "model_name": "cats-and-dogs",
     "model_version": "v1",
-    "s3_model_path": "pipeline-artifacts/02_model_training/models/cats_and_dogs",
+    "s3_model_path": "02_model_training/models/cats_and_dogs",
     "namespace": "ic-shared-rag-llm"
   }'
 ```
