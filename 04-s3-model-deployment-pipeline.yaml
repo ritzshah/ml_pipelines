@@ -185,33 +185,33 @@ spec:
                   if file_name == 'models.bin':
                       f.write(b'placeholder_binary_model_data')
                   else:  # models.xml
-                      xml_content = '''<?xml version="1.0" ?>
-<net name="''' + model_name + '''" version="11">
-    <layers>
-        <layer id="0" name="input" type="Parameter" version="opset1">
-            <data element_type="f32" shape="1,3,224,224"/>
-            <output>
-                <port id="0" precision="FP32">
-                    <dim>1</dim>
-                    <dim>3</dim>
-                    <dim>224</dim>
-                    <dim>224</dim>
-                </port>
-            </output>
-        </layer>
-        <layer id="1" name="output" type="Result" version="opset1">
-            <input>
-                <port id="0" precision="FP32">
-                    <dim>1</dim>
-                    <dim>2</dim>
-                </port>
-            </input>
-        </layer>
-    </layers>
-    <edges>
-        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>
-    </edges>
-</net>'''
+                      xml_content = '<?xml version="1.0" ?>\n'
+                      xml_content += '<net name="' + model_name + '" version="11">\n'
+                      xml_content += '    <layers>\n'
+                      xml_content += '        <layer id="0" name="input" type="Parameter" version="opset1">\n'
+                      xml_content += '            <data element_type="f32" shape="1,3,224,224"/>\n'
+                      xml_content += '            <output>\n'
+                      xml_content += '                <port id="0" precision="FP32">\n'
+                      xml_content += '                    <dim>1</dim>\n'
+                      xml_content += '                    <dim>3</dim>\n'
+                      xml_content += '                    <dim>224</dim>\n'
+                      xml_content += '                    <dim>224</dim>\n'
+                      xml_content += '                </port>\n'
+                      xml_content += '            </output>\n'
+                      xml_content += '        </layer>\n'
+                      xml_content += '        <layer id="1" name="output" type="Result" version="opset1">\n'
+                      xml_content += '            <input>\n'
+                      xml_content += '                <port id="0" precision="FP32">\n'
+                      xml_content += '                    <dim>1</dim>\n'
+                      xml_content += '                    <dim>2</dim>\n'
+                      xml_content += '                </port>\n'
+                      xml_content += '            </input>\n'
+                      xml_content += '        </layer>\n'
+                      xml_content += '    </layers>\n'
+                      xml_content += '    <edges>\n'
+                      xml_content += '        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>\n'
+                      xml_content += '    </edges>\n'
+                      xml_content += '</net>'
                       f.write(xml_content.encode())
               downloaded_files.append(file_name + " (placeholder)")
       
