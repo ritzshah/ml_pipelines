@@ -72,6 +72,27 @@ The system automatically monitors S3 storage for model updates and triggers depl
    oc get route s3-model-trigger-webhook -n ic-shared-rag-llm -o jsonpath='{.spec.host}'
    ```
 
+### Cleanup
+
+**Verify existing resources**:
+```bash
+./08-verify-resources.sh
+```
+
+**Complete cleanup** (removes all deployed resources):
+```bash
+./07-cleanup-script.sh
+```
+
+**Manual verification after cleanup**:
+```bash
+# Check for any remaining resources
+oc get all,pvc,configmap,cronjob -n ic-shared-rag-llm | grep -i "cats-and-dogs\|s3-model\|model-artifacts"
+
+# Check Tekton resources
+oc get pipelines,tasks,eventlisteners -n ic-shared-rag-llm
+```
+
 ## Usage
 
 ### Automatic Deployment
@@ -177,6 +198,8 @@ ml_pipelines/
 ├── 04-s3-model-deployment-pipeline.yaml    # Main S3 deployment pipeline
 ├── 05-s3-model-trigger.yaml            # S3 triggers and monitoring
 ├── 06-deployment-script.sh             # Automated deployment script
+├── 07-cleanup-script.sh               # Complete cleanup script
+├── 08-verify-resources.sh             # Resource verification script
 └── README.md                           # This documentation
 ```
 
