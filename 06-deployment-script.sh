@@ -111,7 +111,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     "trigger_source": "manual_test",
     "model_name": "${MODEL_NAME}",
     "model_version": "v$(date +%Y%m%d%H%M%S)",
-    "s3_model_path": "pipeline-artifacts/02_model_training/models/cats_and_dogs",
+    "s3_model_path": "02_model_training/models/cats_and_dogs",
     "namespace": "${NAMESPACE}",
     "timestamp": "$(date -Iseconds)"
 }
@@ -160,7 +160,7 @@ else
 fi
 echo ""
 echo "HOW IT WORKS:"
-echo "1. Elyra pipeline uploads model files to S3: pipeline-artifacts/02_model_training/models/cats_and_dogs"
+echo "1. Elyra pipeline uploads model files to S3 bucket 'pipeline-artifacts' at path: 02_model_training/models/cats_and_dogs"
 echo "2. CronJob checks S3 every 5 minutes for model updates"
 echo "3. When new/updated model files detected, webhook triggers deployment pipeline"
 echo "4. Pipeline downloads models.bin and models.xml from S3"
@@ -180,7 +180,7 @@ echo "  -d '{"
 echo "    \"action\": \"s3_model_uploaded\","
 echo "    \"model_name\": \"${MODEL_NAME}\","
 echo "    \"model_version\": \"v1\","
-echo "    \"s3_model_path\": \"pipeline-artifacts/02_model_training/models/cats_and_dogs\","
+echo "    \"s3_model_path\": \"02_model_training/models/cats_and_dogs\","
 echo "    \"namespace\": \"${NAMESPACE}\""
 echo "  }'"
 echo ""

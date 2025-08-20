@@ -134,7 +134,8 @@ spec:
       aws_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
       aws_region = os.environ['AWS_DEFAULT_REGION']
       s3_endpoint = os.environ['AWS_S3_ENDPOINT']
-      s3_bucket = os.environ['AWS_S3_BUCKET']
+      # The actual bucket name is pipeline-artifacts based on the S3 path
+      s3_bucket = "pipeline-artifacts"
       
       print("S3 Endpoint:", s3_endpoint)
       print("S3 Bucket:", s3_bucket)
@@ -151,11 +152,19 @@ spec:
       
       # Create model directory
       model_name = "$(params.model-name)"
-      s3_path = "$(params.s3-model-path)"
+      s3_path_param = "$(params.s3-model-path)"
+      # Remove bucket name from path since we set it separately
+      s3_path = s3_path_param.replace("pipeline-artifacts/", "")
       local_model_dir = "/workspace/model-storage/" + model_name
-      os.makedirs(local_model_dir, exist_ok=True)
+      
+      # Ensure the workspace directory is writable
+      import stat
+      os.makedirs("/workspace/model-storage", mode=0o755, exist_ok=True)
+      os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
       
       print("Local model directory:", local_model_dir)
+      print("Adjusted S3 path:", s3_path)
+      print("Original S3 path param:", s3_path_param)
       
       # Download model files
       model_files = ['models.bin', 'models.xml']

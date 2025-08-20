@@ -54,7 +54,7 @@ spec:
     default: "v1"
   - name: s3-model-path
     description: S3 path to the model files
-    default: "pipeline-artifacts/02_model_training/models/cats_and_dogs"
+    default: "02_model_training/models/cats_and_dogs"
   - name: namespace
     description: Target namespace
     default: "ic-shared-rag-llm"
@@ -139,7 +139,7 @@ spec:
   - name: s3-model-path
     type: string
     description: S3 path to monitor
-    default: "pipeline-artifacts/02_model_training/models/cats_and_dogs"
+    default: "02_model_training/models/cats_and_dogs"
   - name: model-name
     type: string
     description: Name of the model
@@ -201,7 +201,8 @@ spec:
       aws_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
       aws_region = os.environ['AWS_DEFAULT_REGION']
       s3_endpoint = os.environ['AWS_S3_ENDPOINT']
-      s3_bucket = os.environ['AWS_S3_BUCKET']
+      # Use the actual bucket name
+      s3_bucket = "pipeline-artifacts"
       
       # Create S3 client
       s3_client = boto3.client(
@@ -213,7 +214,9 @@ spec:
           config=Config(signature_version='s3v4')
       )
       
-      model_path = "$(params.s3-model-path)"
+      s3_path_param = "$(params.s3-model-path)"
+      # Remove bucket name from path since we set it separately
+      model_path = s3_path_param.replace("pipeline-artifacts/", "")
       model_name = "$(params.model-name)"
       check_interval = int("$(params.check-interval)")
       namespace = "$(params.namespace)"
@@ -436,7 +439,8 @@ spec:
               aws_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
               aws_region = os.environ['AWS_DEFAULT_REGION']
               s3_endpoint = os.environ['AWS_S3_ENDPOINT']
-              s3_bucket = os.environ['AWS_S3_BUCKET']
+              # Use the actual bucket name
+              s3_bucket = 'pipeline-artifacts'
               
               s3_client = boto3.client(
                   's3',
@@ -447,7 +451,7 @@ spec:
                   config=Config(signature_version='s3v4')
               )
               
-              model_path = 'pipeline-artifacts/02_model_training/models/cats_and_dogs'
+              model_path = '02_model_training/models/cats_and_dogs'
               model_files = ['models.bin', 'models.xml']
               
               print(f'Checking S3 path: {model_path}')
