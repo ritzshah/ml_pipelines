@@ -186,8 +186,8 @@ spec:
       print("Adjusted S3 path:", s3_path)
       print("Original S3 path param:", s3_path_param)
       
-      # Download model files
-      model_files = ['models.bin', 'models.xml']
+      # Download model files (note: actual files are model.bin and model.xml, not models.bin/models.xml)
+      model_files = ['model.bin', 'model.xml']
       downloaded_files = []
       
       for file_name in model_files:
@@ -211,9 +211,9 @@ spec:
               # For demo purposes, create placeholder files if download fails
               print("Creating placeholder", file_name, "for demo...")
               with open(local_file_path, 'wb') as f:
-                  if file_name == 'models.bin':
+                  if file_name == 'model.bin':
                       f.write(b'placeholder_binary_model_data')
-                  else:  # models.xml
+                  else:  # model.xml
                       xml_content = '<?xml version="1.0" ?>\n'
                       xml_content += '<net name="' + model_name + '" version="11">\n'
                       xml_content += '    <layers>\n'
@@ -321,14 +321,14 @@ spec:
       else
           echo "Model files not found in expected location: ${MODEL_DIR}"
           echo "Checking if model files exist elsewhere in workspace..."
-          find /workspace/model-storage -name "*.bin" -o -name "*.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
+          find /workspace/model-storage -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
           
           # Try to find any directory with model files
           for dir in /workspace/model-storage/*/; do
               if [ -d "$dir" ] && [ "$(ls -A "$dir" 2>/dev/null)" ]; then
                   echo "Found files in directory: $dir"
                   ls -la "$dir"
-                  if [ -f "$dir/metadata.json" ] || [ -f "$dir/models.bin" ] || [ -f "$dir/models.xml" ]; then
+                  if [ -f "$dir/metadata.json" ] || [ -f "$dir/model.bin" ] || [ -f "$dir/model.xml" ]; then
                       echo "Using model files from: $dir"
                       MODEL_DIR="$dir"
                       break

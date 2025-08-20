@@ -27,7 +27,7 @@ The system automatically monitors S3 storage for model updates and triggers depl
 ### 1. S3 Model Storage
 - **Bucket**: `pipeline-artifacts`
 - **Path**: `02_model_training/models/cats_and_dogs`
-- **Files**: `models.bin`, `models.xml` (OpenVINO IR format)
+- **Files**: `model.bin`, `model.xml` (OpenVINO IR format)
 - **Secret**: `aws-shared-rag-connection` (pre-configured S3 credentials)
 
 ### 2. Automated Monitoring
@@ -245,7 +245,7 @@ curl -X POST "https://${WEBHOOK_URL}" -H "Content-Type: application/json" -d '{"
 This CI/CD system is designed to work seamlessly with the existing Elyra pipeline:
 
 1. **Elyra Pipeline**: Trains the cats and dogs classification model
-2. **Upload Task**: Uploads `models.bin` and `models.xml` to S3 storage
+2. **Upload Task**: Uploads `model.bin` and `model.xml` to S3 storage
 3. **Automatic Trigger**: S3 monitoring detects new/updated files
 4. **Deployment**: Tekton pipeline automatically deploys the model
 5. **Serving**: Model becomes available via OpenShift AI endpoints

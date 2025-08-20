@@ -224,7 +224,7 @@ spec:
       def check_model_files():
           """Check if model files exist and get their last modified times"""
           try:
-              model_files = ['models.bin', 'models.xml']
+              model_files = ['model.bin', 'model.xml']
               file_info = {}
               
               for file_name in model_files:
@@ -452,7 +452,7 @@ spec:
               )
               
               model_path = '02_model_training/models/cats_and_dogs'
-              model_files = ['models.bin', 'models.xml']
+              model_files = ['model.bin', 'model.xml']
               
               print(f'Checking S3 path: {model_path}')
               
