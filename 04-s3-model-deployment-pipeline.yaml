@@ -157,30 +157,29 @@ spec:
       s3_path = s3_path_param.replace("pipeline-artifacts/", "")
       
       # Use the shared workspace directory
-      local_model_dir = "/workspace/model-storage/" + model_name
+      workspace_base = "/workspace/model-storage"
+      local_model_dir = workspace_base + "/" + model_name
       
-      # Create model directory in workspace
-      import stat
-      import subprocess
-      
-      # Check workspace permissions and create directory
+      # Check if workspace is writable, otherwise use current directory
       print("Checking workspace permissions...")
       try:
-          # First ensure the parent directory exists
-          subprocess.run(["mkdir", "-p", "/workspace/model-storage"], check=True)
-          subprocess.run(["chmod", "755", "/workspace/model-storage"], check=False)
+          # Test if we can write to workspace
+          import tempfile
+          test_file = workspace_base + "/.write_test"
+          with open(test_file, 'w') as f:
+              f.write("test")
+          os.remove(test_file)
           
-          # Create model directory
-          subprocess.run(["mkdir", "-p", local_model_dir], check=True)
-          subprocess.run(["chmod", "755", local_model_dir], check=False)
+          # Workspace is writable, create model directory
+          os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
+          print("Using workspace directory:", local_model_dir)
           
-          print("Workspace directory created successfully")
-      except subprocess.CalledProcessError as e:
-          print("Error creating workspace directory:", str(e))
-          # Fallback to current working directory
+      except (OSError, PermissionError) as e:
+          print("Workspace is not writable:", str(e))
+          # Use current working directory instead
           local_model_dir = "./" + model_name
           os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
-          print("Using fallback directory:", local_model_dir)
+          print("Using current directory:", local_model_dir)
       
       print("Local model directory:", local_model_dir)
       print("Adjusted S3 path:", s3_path)
@@ -265,10 +264,34 @@ spec:
       with open(metadata_path, 'w') as f:
           json.dump(metadata, f, indent=2)
       
+      # Create a marker file with the actual model directory location
+      marker_content = {
+          "model_directory": os.path.abspath(local_model_dir),
+          "model_name": model_name,
+          "downloaded_files": downloaded_files,
+          "download_time": datetime.now().isoformat()
+      }
+      
+      # Save marker to multiple locations to ensure next task can find it
+      marker_locations = [
+          "/workspace/model-storage/model_location.json",
+          "./model_location.json",
+          local_model_dir + "/model_location.json"
+      ]
+      
+      for marker_path in marker_locations:
+          try:
+              with open(marker_path, 'w') as f:
+                  json.dump(marker_content, f, indent=2)
+              print("Saved model location marker to:", marker_path)
+          except Exception as e:
+              print("Could not save marker to", marker_path + ":", str(e))
+      
       print("Model download completed successfully!")
       print("Downloaded files:", downloaded_files)
       print("Local files:", os.listdir(local_model_dir))
       print("Metadata saved to:", metadata_path)
+      print("Model directory (absolute):", os.path.abspath(local_model_dir))
       
       # List workspace contents
       try:
@@ -311,38 +334,79 @@ spec:
       echo "Deploying ${MODEL_NAME}:${MODEL_VERSION} to OpenShift AI..."
       echo "Model directory: ${MODEL_DIR}"
       
-      # Check if model files exist in workspace
-      echo "Checking for model files in workspace..."
-      ls -la "/workspace/model-storage/" || echo "Cannot list workspace root"
+      # Check for model location marker first
+      echo "Checking for model files..."
+      echo "Expected location: ${MODEL_DIR}"
       
+      # Look for model location marker
+      MARKER_FOUND=false
+      for marker_path in "/workspace/model-storage/model_location.json" "./model_location.json"; do
+          if [ -f "$marker_path" ]; then
+              echo "Found model location marker: $marker_path"
+              cat "$marker_path"
+              # Try to extract the actual model directory path
+              ACTUAL_MODEL_DIR=$(cat "$marker_path" | grep -o '"model_directory": "[^"]*"' | cut -d'"' -f4)
+              if [ -n "$ACTUAL_MODEL_DIR" ] && [ -d "$ACTUAL_MODEL_DIR" ]; then
+                  echo "Using model directory from marker: $ACTUAL_MODEL_DIR"
+                  MODEL_DIR="$ACTUAL_MODEL_DIR"
+                  MARKER_FOUND=true
+                  break
+              fi
+          fi
+      done
+      
+      if [ "$MARKER_FOUND" = "false" ]; then
+          echo "No model location marker found, using default locations"
+      fi
+      
+      # First check the identified/default model directory
       if [ -d "${MODEL_DIR}" ] && [ "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
           echo "Found model files in workspace:"
           ls -la "${MODEL_DIR}"
       else
-          echo "Model files not found in expected location: ${MODEL_DIR}"
-          echo "Checking if model files exist elsewhere in workspace..."
-          find /workspace/model-storage -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
+          echo "Model files not found in workspace: ${MODEL_DIR}"
+          echo "Checking current directory and other locations..."
           
-          # Try to find any directory with model files
-          for dir in /workspace/model-storage/*/; do
-              if [ -d "$dir" ] && [ "$(ls -A "$dir" 2>/dev/null)" ]; then
-                  echo "Found files in directory: $dir"
-                  ls -la "$dir"
-                  if [ -f "$dir/metadata.json" ] || [ -f "$dir/model.bin" ] || [ -f "$dir/model.xml" ]; then
-                      echo "Using model files from: $dir"
-                      MODEL_DIR="$dir"
-                      break
+          # Check current directory
+          CURRENT_DIR_MODEL="./${MODEL_NAME}"
+          if [ -d "${CURRENT_DIR_MODEL}" ] && [ "$(ls -A ${CURRENT_DIR_MODEL} 2>/dev/null)" ]; then
+              echo "Found model files in current directory:"
+              ls -la "${CURRENT_DIR_MODEL}"
+              MODEL_DIR="${CURRENT_DIR_MODEL}"
+          else
+              echo "Model files not found in current directory either"
+              
+              # Search for model files anywhere accessible
+              echo "Searching for model files..."
+              find /workspace -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
+              find . -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in current directory"
+              
+              # Try to find any directory with model files in current directory
+              for dir in ./*/; do
+                  if [ -d "$dir" ] && [ "$(ls -A "$dir" 2>/dev/null)" ]; then
+                      echo "Found files in directory: $dir"
+                      ls -la "$dir"
+                      if [ -f "$dir/metadata.json" ] || [ -f "$dir/model.bin" ] || [ -f "$dir/model.xml" ]; then
+                          echo "Using model files from: $dir"
+                          MODEL_DIR="$dir"
+                          break
+                      fi
                   fi
+              done
+              
+              # Final check
+              if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
+                  echo "Error: No model files found anywhere"
+                  echo "Searched locations:"
+                  echo "  - ${MODEL_DIR}"
+                  echo "  - ${CURRENT_DIR_MODEL}"
+                  echo "  - Current working directory: $(pwd)"
+                  exit 1
               fi
-          done
-          
-          # Final check
-          if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
-              echo "Error: No model files found in workspace"
-              echo "Expected location: ${MODEL_DIR}"
-              exit 1
           fi
       fi
+      
+      echo "Using model directory: ${MODEL_DIR}"
       
       # Create ConfigMap with model files
       echo "Creating ConfigMap with model files..."
