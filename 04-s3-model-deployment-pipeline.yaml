@@ -619,34 +619,3 @@ spec:
           echo "You may need to check the route status manually"
       fi
 
----
-# PipelineRun example to trigger the deployment
-apiVersion: tekton.dev/v1beta1
-kind: PipelineRun
-metadata:
-  generateName: cats-dogs-model-deployment-
-  namespace: ic-shared-rag-llm
-  labels:
-    app: model-deployment
-    model: cats-and-dogs
-spec:
-  pipelineRef:
-    name: s3-model-deployment-pipeline
-  params:
-  - name: model-name
-    value: "cats-and-dogs"
-  - name: model-version
-    value: "v1"
-  - name: s3-model-path
-    value: "pipeline-artifacts/02_model_training/models/cats_and_dogs"
-  - name: namespace
-    value: "ic-shared-rag-llm"
-  workspaces:
-  - name: model-storage
-    volumeClaimTemplate:
-      spec:
-        accessModes:
-        - ReadWriteOnce
-        resources:
-          requests:
-            storage: 5Gi
