@@ -500,3 +500,59 @@ spec:
                   print('No recent model updates found.')
               "
           restartPolicy: OnFailure
+
+---
+# ServiceAccount for Tekton Triggers
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-triggers-sa
+  namespace: ic-shared-rag-llm
+  labels:
+    app: s3-model-deployment-trigger
+
+---
+# Role with necessary permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tekton-triggers-role
+  namespace: ic-shared-rag-llm
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets", "services", "persistentvolumeclaims"]
+  verbs: ["get", "list", "create", "update", "delete", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "create", "update", "delete", "patch"]
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list", "create", "update", "delete", "patch"]
+- apiGroups: ["tekton.dev"]
+  resources: ["pipelineruns", "taskruns", "pipelines", "tasks"]
+  verbs: ["get", "list", "create", "update", "delete", "patch"]
+- apiGroups: ["triggers.tekton.dev"]
+  resources: ["eventlisteners", "triggerbindings", "triggertemplates"]
+  verbs: ["get", "list", "create", "update", "delete", "patch"]
+- apiGroups: ["serving.kserve.io"]
+  resources: ["inferenceservices", "servingruntimes"]
+  verbs: ["get", "list", "create", "update", "delete", "patch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "create", "update", "delete", "patch"]
+
+---
+# RoleBinding to bind the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-triggers-binding
+  namespace: ic-shared-rag-llm
+subjects:
+- kind: ServiceAccount
+  name: tekton-triggers-sa
+  namespace: ic-shared-rag-llm
+roleRef:
+  kind: Role
+  name: tekton-triggers-role
+  apiGroup: rbac.authorization.k8s.io
