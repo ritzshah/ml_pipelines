@@ -126,8 +126,8 @@ spec:
       from botocore.client import Config
       
       print("Starting S3 model download...")
-      print(f"Model name: $(params.model-name)")
-      print(f"S3 path: $(params.s3-model-path)")
+      print("Model name: $(params.model-name)")
+      print("S3 path: $(params.s3-model-path)")
       
       # S3 configuration from secret
       aws_access_key = os.environ['AWS_ACCESS_KEY_ID']
