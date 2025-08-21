@@ -162,8 +162,12 @@ delete_resource "clusterrole" "tekton-triggers-cluster-role" ""
 echo ""
 echo "Step 10: Force deleting PVCs and storage..."
 delete_resource "pvc" "${MODEL_NAME}-model-storage" "$NAMESPACE" "true"
+delete_resource "pvc" "${MODEL_NAME}-model-files-pvc" "$NAMESPACE" "true"
 delete_resource "pvc" "02-model-training-v2-pvc" "$NAMESPACE" "true"
 delete_resource "pvc" "model-artifacts-pvc" "$NAMESPACE" "true"
+
+# Delete model copy jobs
+delete_resource "job" "${MODEL_NAME}-copy-model-files" "$NAMESPACE" "true"
 
 # Delete any PVCs created by volumeClaimTemplates
 delete_by_label "pvc" "app=s3-model-deployment" "$NAMESPACE" "true"

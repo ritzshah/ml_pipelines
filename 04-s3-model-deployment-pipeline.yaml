@@ -431,19 +431,13 @@ spec:
       
       echo "Using model directory: ${MODEL_DIR}"
       
-      # Create ConfigMap with model files
-      echo "Creating ConfigMap with model files..."
-      oc create configmap ${MODEL_NAME}-model-files \
-          --from-file="${MODEL_DIR}" \
-          --namespace="${NAMESPACE}" \
-          --dry-run=client -o yaml | oc apply -f -
-      
-      # Create PVC for model storage if it doesn't exist
+      # Copy model files to a PVC instead of ConfigMap (model files too large for ConfigMap)
+      echo "Creating PVC for model files..."
       cat <<EOF | oc apply -f -
       apiVersion: v1
       kind: PersistentVolumeClaim
       metadata:
-        name: ${MODEL_NAME}-model-storage
+        name: ${MODEL_NAME}-model-files-pvc
         namespace: ${NAMESPACE}
         labels:
           app: model-serving
@@ -456,6 +450,53 @@ spec:
             storage: 5Gi
         storageClassName: gp3-csi
       EOF
+      
+      # Create a job to copy model files to the PVC
+      echo "Creating job to copy model files to PVC..."
+      cat <<EOF | oc apply -f -
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: ${MODEL_NAME}-copy-model-files
+        namespace: ${NAMESPACE}
+        labels:
+          app: model-serving
+          model: ${MODEL_NAME}
+      spec:
+        template:
+          spec:
+            containers:
+            - name: copy-files
+              image: busybox:1.35
+              command:
+              - sh
+              - -c
+              - |
+                echo "Copying model files to PVC..."
+                mkdir -p /pvc-models/${MODEL_NAME}/1
+                cp -v /source-models/* /pvc-models/${MODEL_NAME}/1/
+                ls -la /pvc-models/${MODEL_NAME}/1/
+                echo "Model files copied successfully!"
+              volumeMounts:
+              - name: source-models
+                mountPath: /source-models
+              - name: model-files-pvc
+                mountPath: /pvc-models
+            restartPolicy: Never
+            volumes:
+            - name: source-models
+              persistentVolumeClaim:
+                claimName: model-storage
+            - name: model-files-pvc
+              persistentVolumeClaim:
+                claimName: ${MODEL_NAME}-model-files-pvc
+        backoffLimit: 3
+      EOF
+      
+      # Wait for job to complete
+      echo "Waiting for model copy job to complete..."
+      oc wait --for=condition=complete job/${MODEL_NAME}-copy-model-files -n ${NAMESPACE} --timeout=300s
+      
       
       # Create ServingRuntime for OpenVINO
       cat <<EOF | oc apply -f -
@@ -548,14 +589,10 @@ spec:
               - sh
               - -c
               - |
-                echo "Copying model files to shared volume..."
-                mkdir -p /models/${MODEL_NAME}/1
-                cp /configmap-data/* /models/${MODEL_NAME}/1/
+                echo "Model files are already in PVC, verifying..."
                 ls -la /models/${MODEL_NAME}/1/
-                echo "Model files copied successfully!"
+                echo "Model files verified successfully!"
               volumeMounts:
-              - name: model-files
-                mountPath: /configmap-data
               - name: model-storage
                 mountPath: /models
             containers:
@@ -597,12 +634,9 @@ spec:
                 initialDelaySeconds: 60
                 periodSeconds: 30
             volumes:
-            - name: model-files
-              configMap:
-                name: ${MODEL_NAME}-model-files
             - name: model-storage
               persistentVolumeClaim:
-                claimName: ${MODEL_NAME}-model-storage
+                claimName: ${MODEL_NAME}-model-files-pvc
       EOF
       
       echo "Model deployment created successfully!"
