@@ -156,30 +156,50 @@ spec:
       # Remove bucket name from path since we set it separately
       s3_path = s3_path_param.replace("pipeline-artifacts/", "")
       
-      # Use the shared workspace directory
-      workspace_base = "/workspace/model-storage"
-      local_model_dir = workspace_base + "/" + model_name
+      # Use a shared directory that both tasks can access
+      # Try multiple writable locations in order of preference
+      potential_dirs = [
+          "/workspace/model-storage",  # Preferred if writable
+          "/tmp/shared-models",        # Fallback shared location
+          "/opt/app-root/src"          # Current directory fallback
+      ]
       
-      # Check if workspace is writable, otherwise use current directory
       print("Checking workspace permissions...")
-      try:
-          # Test if we can write to workspace
-          import tempfile
-          test_file = workspace_base + "/.write_test"
-          with open(test_file, 'w') as f:
-              f.write("test")
-          os.remove(test_file)
-          
-          # Workspace is writable, create model directory
-          os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
-          print("Using workspace directory:", local_model_dir)
-          
-      except (OSError, PermissionError) as e:
-          print("Workspace is not writable:", str(e))
-          # Use current working directory instead
+      local_model_dir = None
+      
+      # Ensure shared directories exist
+      for shared_dir in ["/tmp/shared-models"]:
+          try:
+              os.makedirs(shared_dir, mode=0o755, exist_ok=True)
+          except:
+              pass
+      
+      for base_dir in potential_dirs:
+          try:
+              # Test if we can write to this location
+              test_dir = base_dir + "/test-write"
+              os.makedirs(test_dir, mode=0o755, exist_ok=True)
+              test_file = test_dir + "/.write_test"
+              with open(test_file, 'w') as f:
+                  f.write("test")
+              os.remove(test_file)
+              os.rmdir(test_dir)
+              
+              # This location is writable
+              local_model_dir = base_dir + "/" + model_name
+              os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
+              print("Using writable directory:", local_model_dir)
+              break
+              
+          except (OSError, PermissionError) as e:
+              print(f"Directory {base_dir} is not writable:", str(e))
+              continue
+      
+      if local_model_dir is None:
+          # Last resort: use current working directory
           local_model_dir = "./" + model_name
           os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
-          print("Using current directory:", local_model_dir)
+          print("Using current directory as fallback:", local_model_dir)
       
       print("Local model directory:", local_model_dir)
       print("Adjusted S3 path:", s3_path)
@@ -275,6 +295,9 @@ spec:
       # Save marker to multiple locations to ensure next task can find it
       marker_locations = [
           "/workspace/model-storage/model_location.json",
+          "/tmp/shared-models/model_location.json", 
+          "/opt/app-root/src/model_location.json",
+          "/tmp/model_location.json",
           "./model_location.json",
           local_model_dir + "/model_location.json"
       ]
@@ -338,9 +361,11 @@ spec:
       echo "Checking for model files..."
       echo "Expected location: ${MODEL_DIR}"
       
-      # Look for model location marker
+      # Look for model location marker in multiple locations
       MARKER_FOUND=false
-      for marker_path in "/workspace/model-storage/model_location.json" "./model_location.json"; do
+      MARKER_PATHS="/workspace/model-storage/model_location.json /tmp/shared-models/model_location.json /opt/app-root/src/model_location.json /tmp/model_location.json ./model_location.json"
+      
+      for marker_path in $MARKER_PATHS; do
           if [ -f "$marker_path" ]; then
               echo "Found model location marker: $marker_path"
               cat "$marker_path"
@@ -367,32 +392,32 @@ spec:
           echo "Model files not found in workspace: ${MODEL_DIR}"
           echo "Checking current directory and other locations..."
           
-          # Check current directory
-          CURRENT_DIR_MODEL="./${MODEL_NAME}"
-          if [ -d "${CURRENT_DIR_MODEL}" ] && [ "$(ls -A ${CURRENT_DIR_MODEL} 2>/dev/null)" ]; then
-              echo "Found model files in current directory:"
-              ls -la "${CURRENT_DIR_MODEL}"
-              MODEL_DIR="${CURRENT_DIR_MODEL}"
-          else
-              echo "Model files not found in current directory either"
-              
-              # Search for model files anywhere accessible
-              echo "Searching for model files..."
-              find /workspace -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
-              find . -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in current directory"
-              
-              # Try to find any directory with model files in current directory
-              for dir in ./*/; do
-                  if [ -d "$dir" ] && [ "$(ls -A "$dir" 2>/dev/null)" ]; then
-                      echo "Found files in directory: $dir"
-                      ls -la "$dir"
-                      if [ -f "$dir/metadata.json" ] || [ -f "$dir/model.bin" ] || [ -f "$dir/model.xml" ]; then
-                          echo "Using model files from: $dir"
-                          MODEL_DIR="$dir"
-                          break
-                      fi
+          # Check potential model directories in order
+          POTENTIAL_MODEL_DIRS="/workspace/model-storage/${MODEL_NAME} /tmp/shared-models/${MODEL_NAME} /opt/app-root/src/${MODEL_NAME} ./${MODEL_NAME}"
+          
+          for potential_dir in $POTENTIAL_MODEL_DIRS; do
+              echo "Checking potential directory: $potential_dir"
+              if [ -d "$potential_dir" ] && [ "$(ls -A "$potential_dir" 2>/dev/null)" ]; then
+                  echo "Found model files in: $potential_dir"
+                  ls -la "$potential_dir"
+                  if [ -f "$potential_dir/metadata.json" ] || [ -f "$potential_dir/model.bin" ] || [ -f "$potential_dir/model.xml" ]; then
+                      echo "Using model files from: $potential_dir"
+                      MODEL_DIR="$potential_dir"
+                      break
                   fi
-              done
+              else
+                  echo "No files in: $potential_dir"
+              fi
+          done
+          
+          # If still not found, do a broader search
+          if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
+              echo "Doing broader search for model files..."
+              find /workspace -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
+              find /tmp -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in /tmp"
+              find /opt/app-root/src -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in /opt/app-root/src"
+              find . -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in current directory"
+          fi
               
               # Final check
               if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
