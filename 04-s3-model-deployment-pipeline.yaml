@@ -418,17 +418,15 @@ spec:
               find /opt/app-root/src -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in /opt/app-root/src"
               find . -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in current directory"
           fi
-              
-              # Final check
-              if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
-                  echo "Error: No model files found anywhere"
-                  echo "Searched locations:"
-                  echo "  - ${MODEL_DIR}"
-                  echo "  - ${CURRENT_DIR_MODEL}"
-                  echo "  - Current working directory: $(pwd)"
-                  exit 1
-              fi
-          fi
+      fi
+      
+      # Final check
+      if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
+          echo "Error: No model files found anywhere"
+          echo "Searched locations:"
+          echo "  - ${MODEL_DIR}"
+          echo "  - Current working directory: $(pwd)"
+          exit 1
       fi
       
       echo "Using model directory: ${MODEL_DIR}"
