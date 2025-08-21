@@ -119,28 +119,155 @@ curl -X POST "https://${WEBHOOK_URL}" \
 ```
 
 ### Model Inference
-Once deployed, access the model endpoints:
 
+#### Get Model Endpoint
 ```bash
 # Get model endpoint URL
 MODEL_URL=$(oc get route cats-and-dogs-route -n ic-shared-rag-llm -o jsonpath='{.spec.host}')
+echo "Model URL: https://${MODEL_URL}"
 
+# Or get from ConfigMap
+oc get configmap cats-and-dogs-endpoint-info -n ic-shared-rag-llm -o yaml
+```
+
+#### Health and Status Checks
+```bash
 # Health check
 curl "https://${MODEL_URL}/v1/config"
 
 # Model information
 curl "https://${MODEL_URL}/v1/models/cats-and-dogs"
 
-# Make predictions
+# Model metadata
+curl "https://${MODEL_URL}/v1/models/cats-and-dogs/metadata"
+```
+
+#### Image Classification - Cats vs Dogs
+
+**Option 1: Using base64 encoded image**
+```bash
+# Convert image to base64 (replace with your image path)
+IMAGE_BASE64=$(base64 -w 0 /path/to/your/image.jpg)
+
+# Make prediction
+curl -X POST "https://${MODEL_URL}/v1/models/cats-and-dogs:predict" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"instances\": [
+      {
+        \"data\": \"${IMAGE_BASE64}\"
+      }
+    ]
+  }"
+```
+
+**Option 2: Using binary data (raw image)**
+```bash
+# Make prediction with binary image data
 curl -X POST "https://${MODEL_URL}/v1/models/cats-and-dogs:predict" \
   -H "Content-Type: application/json" \
   -d '{
     "instances": [
       {
-        "data": "base64_encoded_image_data"
+        "image_bytes": {"b64": "'$(base64 -w 0 /path/to/image.jpg)'"}
       }
     ]
   }'
+```
+
+**Option 3: Using tensor input format**
+```bash
+# For preprocessed tensor input (224x224x3 normalized image)
+curl -X POST "https://${MODEL_URL}/v1/models/cats-and-dogs:predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instances": [
+      {
+        "input": [[[0.485, 0.456, 0.406], [0.485, 0.456, 0.406]]]
+      }
+    ]
+  }'
+```
+
+#### Expected Response Format
+```json
+{
+  "predictions": [
+    {
+      "output": [0.8, 0.2]
+    }
+  ]
+}
+```
+
+**Interpretation:**
+- Output array: `[cat_probability, dog_probability]`
+- Values sum to 1.0
+- Higher value indicates predicted class
+- Example: `[0.8, 0.2]` = 80% cat, 20% dog
+
+#### Test with Sample Images
+
+**Download test images:**
+```bash
+# Download sample cat image
+curl -o cat.jpg "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=224&h=224&fit=crop"
+
+# Download sample dog image  
+curl -o dog.jpg "https://images.unsplash.com/photo-1552053831-71594a27632d?w=224&h=224&fit=crop"
+```
+
+**Test cat image:**
+```bash
+MODEL_URL=$(oc get route cats-and-dogs-route -n ic-shared-rag-llm -o jsonpath='{.spec.host}')
+
+curl -X POST "https://${MODEL_URL}/v1/models/cats-and-dogs:predict" \
+  -H "Content-Type: application/json" \
+  -d "{\"instances\": [{\"data\": \"$(base64 -w 0 cat.jpg)\"}]}"
+```
+
+**Test dog image:**
+```bash
+curl -X POST "https://${MODEL_URL}/v1/models/cats-and-dogs:predict" \
+  -H "Content-Type: application/json" \
+  -d "{\"instances\": [{\"data\": \"$(base64 -w 0 dog.jpg)\"}]}"
+```
+
+#### Batch Predictions
+```bash
+# Predict multiple images at once
+curl -X POST "https://${MODEL_URL}/v1/models/cats-and-dogs:predict" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"instances\": [
+      {\"data\": \"$(base64 -w 0 cat.jpg)\"},
+      {\"data\": \"$(base64 -w 0 dog.jpg)\"}
+    ]
+  }"
+```
+
+#### Troubleshooting
+
+**If model endpoint is not ready:**
+```bash
+# Check deployment status
+oc get deployments -n ic-shared-rag-llm -l model=cats-and-dogs
+
+# Check pod logs
+oc logs -l app=model-serving,model=cats-and-dogs -n ic-shared-rag-llm
+
+# Check route status
+oc get route cats-and-dogs-route -n ic-shared-rag-llm
+```
+
+**If getting errors:**
+```bash
+# Verify model is loaded
+curl "https://${MODEL_URL}/v1/models/cats-and-dogs/metadata"
+
+# Check if service is accessible
+oc port-forward service/cats-and-dogs-service 8080:8080 -n ic-shared-rag-llm
+curl "http://localhost:8080/v1/models/cats-and-dogs"
 ```
 
 ## Monitoring
@@ -200,6 +327,7 @@ ml_pipelines/
 ├── 06-deployment-script.sh             # Automated deployment script
 ├── 07-cleanup-script.sh               # Complete cleanup script
 ├── 08-verify-resources.sh             # Resource verification script
+├── 09-test-model.sh                   # Model testing script
 └── README.md                           # This documentation
 ```
 
