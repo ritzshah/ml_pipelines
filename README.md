@@ -270,6 +270,18 @@ oc port-forward service/cats-and-dogs-service 8080:8080 -n ic-shared-rag-llm
 curl "http://localhost:8080/v1/models/cats-and-dogs"
 ```
 
+#### Quick Testing Script
+```bash
+# Run automated test script
+./09-test-model.sh
+```
+
+This script will:
+- Check model endpoint availability
+- Download sample cat and dog images
+- Test single and batch predictions
+- Provide formatted results and manual commands
+
 ## Monitoring
 
 ### Pipeline Runs
