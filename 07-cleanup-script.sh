@@ -155,6 +155,10 @@ delete_resource "rolebinding" "tekton-triggers-binding" "$NAMESPACE"
 delete_resource "role" "tekton-triggers-role" "$NAMESPACE"
 delete_resource "serviceaccount" "tekton-triggers-sa" "$NAMESPACE"
 
+# Delete cluster-scoped RBAC resources
+delete_resource "clusterrolebinding" "tekton-triggers-cluster-binding" ""
+delete_resource "clusterrole" "tekton-triggers-cluster-role" ""
+
 echo ""
 echo "Step 10: Force deleting PVCs and storage..."
 delete_resource "pvc" "${MODEL_NAME}-model-storage" "$NAMESPACE" "true"

@@ -92,6 +92,10 @@ check_resources "serviceaccounts" "" "$NAMESPACE" "Service Accounts"
 check_resources "roles" "" "$NAMESPACE" "Roles"
 check_resources "rolebindings" "" "$NAMESPACE" "Role Bindings"
 
+echo "CLUSTER RBAC RESOURCES:"
+check_named_resources "clusterroles" "tekton-triggers" "" "Cluster Roles"
+check_named_resources "clusterrolebindings" "tekton-triggers" "" "Cluster Role Bindings"
+
 echo "TRIGGER NETWORKING:"
 check_named_resources "services" "s3-model" "$NAMESPACE" "Trigger Services"
 check_named_resources "routes" "s3-model" "$NAMESPACE" "Trigger Routes"
