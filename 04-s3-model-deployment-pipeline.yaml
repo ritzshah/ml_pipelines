@@ -431,113 +431,29 @@ spec:
       
       echo "Using model directory: ${MODEL_DIR}"
       
-      # Copy model files to a PVC instead of ConfigMap (model files too large for ConfigMap)
-      echo "Creating PVC for model files..."
+      # Create S3 secret for model serving (compatible with the provided spec)
+      echo "Creating S3 secret for model serving..."
       cat <<EOF | oc apply -f -
       apiVersion: v1
-      kind: PersistentVolumeClaim
+      kind: Secret
       metadata:
-        name: ${MODEL_NAME}-model-files-pvc
+        name: ${MODEL_NAME}
         namespace: ${NAMESPACE}
         labels:
           app: model-serving
           model: ${MODEL_NAME}
-      spec:
-        accessModes:
-        - ReadWriteOnce
-        resources:
-          requests:
-            storage: 5Gi
-        storageClassName: gp3-csi
+      type: Opaque
+      data:
+        AWS_ACCESS_KEY_ID: bWluaW8=
+        AWS_DEFAULT_REGION: dXM=
+        AWS_S3_BUCKET: cGlwZWxpbmUtYXJ0aWZhY3Rz
+        AWS_S3_ENDPOINT: aHR0cDovL21pbmlvLmljLXNoYXJlZC1yYWctbWluaW8uc3ZjOjkwMDA=
+        AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=
       EOF
       
-      # Create a job to copy model files to the PVC
-      echo "Creating job to copy model files to PVC..."
-      cat <<EOF | oc apply -f -
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: ${MODEL_NAME}-copy-model-files
-        namespace: ${NAMESPACE}
-        labels:
-          app: model-serving
-          model: ${MODEL_NAME}
-      spec:
-        template:
-          spec:
-            containers:
-            - name: copy-files
-              image: busybox:1.35
-              command:
-              - sh
-              - -c
-              - |
-                echo "Copying model files to PVC..."
-                mkdir -p /pvc-models/${MODEL_NAME}/1
-                cp -v /source-models/* /pvc-models/${MODEL_NAME}/1/
-                ls -la /pvc-models/${MODEL_NAME}/1/
-                echo "Model files copied successfully!"
-              volumeMounts:
-              - name: source-models
-                mountPath: /source-models
-              - name: model-files-pvc
-                mountPath: /pvc-models
-            restartPolicy: Never
-            volumes:
-            - name: source-models
-              persistentVolumeClaim:
-                claimName: model-storage
-            - name: model-files-pvc
-              persistentVolumeClaim:
-                claimName: ${MODEL_NAME}-model-files-pvc
-        backoffLimit: 3
-      EOF
       
-      # Wait for job to complete
-      echo "Waiting for model copy job to complete..."
-      oc wait --for=condition=complete job/${MODEL_NAME}-copy-model-files -n ${NAMESPACE} --timeout=300s
-      
-      
-      # Create ServingRuntime for OpenVINO
-      cat <<EOF | oc apply -f -
-      apiVersion: serving.kserve.io/v1alpha1
-      kind: ServingRuntime
-      metadata:
-        name: ${MODEL_NAME}-openvino-runtime
-        namespace: ${NAMESPACE}
-        labels:
-          app: model-serving
-          model: ${MODEL_NAME}
-      spec:
-        supportedModelFormats:
-        - name: openvino_ir
-          version: "1"
-          autoSelect: true
-        containers:
-        - name: kserve-container
-          image: quay.io/modh/openvino_model_server:stable
-          args:
-          - --model_name=$(MODEL_NAME)
-          - --model_path=/mnt/models
-          - --port=8080
-          - --rest_port=8080
-          env:
-          - name: OVMS_MODEL_NAME
-            value: ${MODEL_NAME}
-          resources:
-            requests:
-              cpu: 500m
-              memory: 1Gi
-            limits:
-              cpu: "2"
-              memory: 4Gi
-          ports:
-          - containerPort: 8080
-            name: http1
-            protocol: TCP
-      EOF
-      
-      # Create InferenceService
+      # Create InferenceService using existing OVMS runtime  
+      echo "Creating InferenceService for cats-and-dogs model..."
       cat <<EOF | oc apply -f -
       apiVersion: serving.kserve.io/v1beta1
       kind: InferenceService
@@ -547,103 +463,37 @@ spec:
         labels:
           app: model-serving
           model: ${MODEL_NAME}
+          opendatahub.io/dashboard: 'true'
         annotations:
+          openshift.io/display-name: ${MODEL_NAME}
           serving.kserve.io/deploymentMode: ModelMesh
       spec:
         predictor:
+          automountServiceAccountToken: false
           model:
             modelFormat:
               name: openvino_ir
-            runtime: ${MODEL_NAME}-openvino-runtime
+              version: opset1
+            name: ''
+            resources: {}
+            runtime: ovms
             storage:
-              key: localMinIO
-              path: models/${MODEL_NAME}
+              key: ${MODEL_NAME}
+              path: 02_model_training/models/cats_and_dogs
       EOF
       
-      # Alternative: Create Deployment if InferenceService doesn't work
-      cat <<EOF | oc apply -f -
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ${MODEL_NAME}-deployment
-        namespace: ${NAMESPACE}
-        labels:
-          app: model-serving
-          model: ${MODEL_NAME}
-      spec:
-        replicas: 1
-        selector:
-          matchLabels:
-            app: model-serving
-            model: ${MODEL_NAME}
-        template:
-          metadata:
-            labels:
-              app: model-serving
-              model: ${MODEL_NAME}
-          spec:
-            initContainers:
-            - name: model-loader
-              image: busybox:1.35
-              command:
-              - sh
-              - -c
-              - |
-                echo "Model files are already in PVC, verifying..."
-                ls -la /models/${MODEL_NAME}/1/
-                echo "Model files verified successfully!"
-              volumeMounts:
-              - name: model-storage
-                mountPath: /models
-            containers:
-            - name: openvino-server
-              image: quay.io/modh/openvino_model_server:stable
-              ports:
-              - containerPort: 8080
-                name: http
-              - containerPort: 8081
-                name: grpc
-              env:
-              - name: LOG_LEVEL
-                value: "INFO"
-              args:
-              - --model_name=${MODEL_NAME}
-              - --model_path=/models/${MODEL_NAME}
-              - --port=8080
-              - --rest_port=8081
-              volumeMounts:
-              - name: model-storage
-                mountPath: /models
-              resources:
-                requests:
-                  cpu: 500m
-                  memory: 1Gi
-                limits:
-                  cpu: "2"
-                  memory: 4Gi
-              readinessProbe:
-                httpGet:
-                  path: /v1/config
-                  port: 8081
-                initialDelaySeconds: 30
-                periodSeconds: 10
-              livenessProbe:
-                httpGet:
-                  path: /v1/config
-                  port: 8081
-                initialDelaySeconds: 60
-                periodSeconds: 30
-            volumes:
-            - name: model-storage
-              persistentVolumeClaim:
-                claimName: ${MODEL_NAME}-model-files-pvc
-      EOF
+      echo "Waiting for InferenceService to be ready..."
+      sleep 10
       
-      echo "Model deployment created successfully!"
-      echo "Waiting for deployment to be ready..."
-      oc rollout status deployment/${MODEL_NAME}-deployment -n ${NAMESPACE} --timeout=300s
+      # Check InferenceService status
+      echo "Checking InferenceService status..."
+      oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} || echo "InferenceService not found"
       
-      echo "Deployment completed!"
+      # Wait for the service to be ready
+      echo "Waiting for predictor to be ready..."
+      oc wait --for=condition=PredictorReady inferenceservice/${MODEL_NAME} -n ${NAMESPACE} --timeout=300s || echo "Timeout waiting for predictor"
+      
+      echo "InferenceService deployment completed!"
 
 ---
 apiVersion: tekton.dev/v1beta1
@@ -671,36 +521,26 @@ spec:
       MODEL_VERSION="$(params.model-version)"
       NAMESPACE="$(params.namespace)"
       
-      echo "Creating service and route for ${MODEL_NAME}..."
+      echo "Getting InferenceService endpoint information for ${MODEL_NAME}..."
       
-      # Create Service
-      cat <<EOF | oc apply -f -
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: ${MODEL_NAME}-service
-        namespace: ${NAMESPACE}
-        labels:
-          app: model-serving
-          model: ${MODEL_NAME}
-      spec:
-        selector:
-          app: model-serving
-          model: ${MODEL_NAME}
-        ports:
-        - name: http
-          port: 8080
-          targetPort: 8080
-          protocol: TCP
-        - name: grpc
-          port: 8081
-          targetPort: 8081
-          protocol: TCP
-        type: ClusterIP
-      EOF
+      # Get InferenceService status and endpoints
+      INFERENCE_SERVICE_STATUS=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o yaml 2>/dev/null || echo "not-found")
       
-      # Create Route
-      cat <<EOF | oc apply -f -
+      if [ "$INFERENCE_SERVICE_STATUS" != "not-found" ]; then
+          echo "InferenceService found, extracting endpoints..."
+          
+          # Extract REST and gRPC URLs from InferenceService status
+          REST_URL=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.restUrl}' 2>/dev/null || echo "not-ready")
+          GRPC_URL=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.grpcUrl}' 2>/dev/null || echo "not-ready")
+          
+          echo "REST URL: $REST_URL"
+          echo "gRPC URL: $GRPC_URL"
+          
+          # Extract hostname for external access
+          if [ "$REST_URL" != "not-ready" ]; then
+              # For ModelMesh, we need to create a route to the modelmesh-serving service
+              echo "Creating route to ModelMesh serving..."
+              cat <<EOF | oc apply -f -
       apiVersion: route.openshift.io/v1
       kind: Route
       metadata:
@@ -714,29 +554,37 @@ spec:
       spec:
         to:
           kind: Service
-          name: ${MODEL_NAME}-service
+          name: modelmesh-serving
           weight: 100
         port:
-          targetPort: http
+          targetPort: 8008
         tls:
           termination: edge
           insecureEdgeTerminationPolicy: Redirect
         wildcardPolicy: None
       EOF
-      
-      # Wait for route to be created
-      echo "Waiting for route to be created..."
-      sleep 15
-      
-      # Get the route URL
-      ROUTE_URL=$(oc get route ${MODEL_NAME}-route -n ${NAMESPACE} -o jsonpath='{.spec.host}' 2>/dev/null || echo "route-not-ready")
+              
+              # Wait for route to be created
+              echo "Waiting for route to be created..."
+              sleep 15
+              
+              ROUTE_URL=$(oc get route ${MODEL_NAME}-route -n ${NAMESPACE} -o jsonpath='{.spec.host}' 2>/dev/null || echo "route-not-ready")
+          else
+              ROUTE_URL="not-ready"
+          fi
+      else
+          echo "InferenceService not found!"
+          ROUTE_URL="inference-service-not-found"
+      fi
       
       if [ "$ROUTE_URL" != "route-not-ready" ]; then
           echo "Model endpoint exposed successfully!"
           echo "Model Server URL: https://${ROUTE_URL}"
-          echo "Health Check: https://${ROUTE_URL}/v1/config"
+          echo "Health Check: https://${ROUTE_URL}/v1/config"  
           echo "Model Info: https://${ROUTE_URL}/v1/models/${MODEL_NAME}"
           echo "Prediction: https://${ROUTE_URL}/v1/models/${MODEL_NAME}:predict"
+          echo "Internal REST URL: ${REST_URL}"
+          echo "Internal gRPC URL: ${GRPC_URL}"
           
           # Create ConfigMap with endpoint information
           cat <<EOF | oc apply -f -
@@ -753,7 +601,10 @@ spec:
         model_version: "${MODEL_VERSION}"
         model_type: "cats_and_dogs_classification"
         framework: "OpenVINO"
-        endpoint_url: "https://${ROUTE_URL}"
+        deployment_type: "KServe_InferenceService"
+        external_endpoint_url: "https://${ROUTE_URL}"
+        internal_rest_url: "${REST_URL}"
+        internal_grpc_url: "${GRPC_URL}"
         health_check_url: "https://${ROUTE_URL}/v1/config"
         model_info_url: "https://${ROUTE_URL}/v1/models/${MODEL_NAME}"
         prediction_url: "https://${ROUTE_URL}/v1/models/${MODEL_NAME}:predict"

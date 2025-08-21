@@ -108,8 +108,9 @@ delete_by_label "taskruns" "app=s3-model-deployment" "$NAMESPACE" "true"
 
 echo ""
 echo "Step 2: Deleting model deployments and services..."
+delete_resource "inferenceservice" "${MODEL_NAME}" "$NAMESPACE"
 delete_resource "deployment" "${MODEL_NAME}-deployment" "$NAMESPACE"
-delete_resource "deployment" "${MODEL_NAME}-openvino-server" "$NAMESPACE"
+delete_resource "deployment" "${MODEL_NAME}-openvino-server" "$NAMESPACE"  
 delete_resource "service" "${MODEL_NAME}-service" "$NAMESPACE"
 delete_resource "route" "${MODEL_NAME}-route" "$NAMESPACE"
 
@@ -165,6 +166,9 @@ delete_resource "pvc" "${MODEL_NAME}-model-storage" "$NAMESPACE" "true"
 delete_resource "pvc" "${MODEL_NAME}-model-files-pvc" "$NAMESPACE" "true"
 delete_resource "pvc" "02-model-training-v2-pvc" "$NAMESPACE" "true"
 delete_resource "pvc" "model-artifacts-pvc" "$NAMESPACE" "true"
+
+# Delete model secrets
+delete_resource "secret" "${MODEL_NAME}" "$NAMESPACE" "true"
 
 # Delete model copy jobs
 delete_resource "job" "${MODEL_NAME}-copy-model-files" "$NAMESPACE" "true"

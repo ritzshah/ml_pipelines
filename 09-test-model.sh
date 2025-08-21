@@ -41,13 +41,34 @@ echo ""
 
 # Get model endpoint URL
 echo "Step 1: Getting model endpoint URL..."
-MODEL_URL=$(oc get route ${MODEL_NAME}-route -n ${NAMESPACE} -o jsonpath='{.spec.host}' 2>/dev/null)
+
+# First try to get from ConfigMap
+MODEL_URL=$(oc get configmap ${MODEL_NAME}-endpoint-info -n ${NAMESPACE} -o jsonpath='{.data.external_endpoint_url}' 2>/dev/null | sed 's|https://||')
 
 if [ -z "$MODEL_URL" ]; then
-    echo "Error: Model route not found!"
-    echo "Check if the model is deployed:"
-    echo "  oc get routes -n ${NAMESPACE}"
-    exit 1
+    # Fallback to route
+    MODEL_URL=$(oc get route ${MODEL_NAME}-route -n ${NAMESPACE} -o jsonpath='{.spec.host}' 2>/dev/null)
+fi
+
+if [ -z "$MODEL_URL" ]; then
+    # Check if InferenceService exists
+    INFERENCE_SERVICE=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o name 2>/dev/null)
+    if [ -n "$INFERENCE_SERVICE" ]; then
+        echo "InferenceService found, but external route may not be configured yet"
+        echo "Internal endpoints:"
+        oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.restUrl}' 2>/dev/null
+        echo ""
+        oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.grpcUrl}' 2>/dev/null
+        echo ""
+        echo "You may need to manually create a route to modelmesh-serving service"
+        exit 1
+    else
+        echo "Error: Model not found!"
+        echo "Check if the model is deployed:"
+        echo "  oc get inferenceservice -n ${NAMESPACE}"
+        echo "  oc get routes -n ${NAMESPACE}"
+        exit 1
+    fi
 fi
 
 echo "✓ Model URL: https://${MODEL_URL}"
