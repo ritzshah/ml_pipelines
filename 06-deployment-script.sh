@@ -70,22 +70,58 @@ oc apply -f 01-model-training-pvc.yaml
 echo "✓ PVCs deployed"
 
 echo ""
-echo "Step 3: Deploying S3 Model Deployment Pipeline..."
+echo "Step 3: Verifying/creating ServingRuntime (ovms)..."
+# Ensure ServingRuntime 'ovms' exists in target namespace (used by InferenceService)
+if ! resource_exists servingruntime ovms $NAMESPACE; then
+    echo "ServingRuntime 'ovms' not found in namespace ${NAMESPACE}. Creating OVMS runtime..."
+    cat <<EOF | oc apply -f -
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: ovms
+  namespace: ${NAMESPACE}
+  labels:
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/recommended: "true"
+  annotations:
+    openshift.io/display-name: OpenVINO Model Server
+spec:
+  supportedModelFormats:
+  - name: openvino_ir
+    version: opset1
+    autoSelect: true
+  multiModel: true
+  containers:
+  - name: ovms
+    image: openvino/model_server:latest
+    args:
+    - "--port=8085"
+    - "--rest_port=8888"
+    - "--file_system_poll_wait_seconds=0"
+    - "--log_level=INFO"
+EOF
+    echo "✓ ServingRuntime 'ovms' created"
+else
+    echo "✓ ServingRuntime 'ovms' already exists"
+fi
+
+echo ""
+echo "Step 4: Deploying S3 Model Deployment Pipeline..."
 oc apply -f 04-s3-model-deployment-pipeline.yaml
 echo "✓ S3 Model Deployment Pipeline deployed"
 
 echo ""
-echo "Step 4: Deploying Tekton Triggers..."
+echo "Step 5: Deploying Tekton Triggers..."
 oc apply -f 05-s3-model-trigger.yaml
 echo "✓ Tekton Triggers deployed"
 
 echo ""
-echo "Step 5: Waiting for EventListener to be ready..."
+echo "Step 6: Waiting for EventListener to be ready..."
 sleep 10
 wait_for_resource eventlistener s3-model-update-listener $NAMESPACE 120
 
 echo ""
-echo "Step 6: Getting webhook URL..."
+echo "Step 7: Getting webhook URL..."
 sleep 5
 WEBHOOK_URL=$(oc get route s3-model-trigger-webhook -n $NAMESPACE -o jsonpath='{.spec.host}' 2>/dev/null || echo "not-ready")
 
@@ -96,7 +132,44 @@ else
 fi
 
 echo ""
-echo "Step 7: Testing model deployment (optional)..."
+echo "Step 8: Ensuring InferenceService exists (using aws-shared-rag-connection secret)..."
+if ! resource_exists inferenceservice ${MODEL_NAME} $NAMESPACE; then
+    echo "Creating InferenceService '${MODEL_NAME}' in namespace '${NAMESPACE}'"
+    cat <<EOF | oc apply -f -
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: ${MODEL_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: model-serving
+    model: ${MODEL_NAME}
+    opendatahub.io/dashboard: 'true'
+  annotations:
+    openshift.io/display-name: ${MODEL_NAME}
+    serving.kserve.io/deploymentMode: ModelMesh
+spec:
+  predictor:
+    automountServiceAccountToken: false
+    model:
+      modelFormat:
+        name: openvino_ir
+        version: opset1
+      runtime: ovms
+      storage:
+        key: aws-shared-rag-connection
+        path: 02_model_training/models/cats_and_dogs
+EOF
+    echo "✓ InferenceService created"
+else
+    echo "✓ InferenceService '${MODEL_NAME}' already exists"
+fi
+
+echo "Waiting for InferenceService to be ready..."
+oc wait --for=condition=PredictorReady inferenceservice/${MODEL_NAME} -n ${NAMESPACE} --timeout=300s || echo "Timeout waiting for predictor"
+
+echo ""
+echo "Step 9: Testing model deployment (optional)..."
 read -p "Do you want to trigger a test deployment now? (y/N): " -n 1 -r
 echo
 
