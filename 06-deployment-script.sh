@@ -48,36 +48,41 @@ if ! resource_exists namespace $NAMESPACE; then
     exit 1
 fi
 
-# Ensure model S3 connection secret exists (cats-and-dogs)
-if ! resource_exists secret cats-and-dogs $NAMESPACE; then
-    echo "Secret 'cats-and-dogs' not found in namespace ${NAMESPACE}. Creating it now..."
+# Ensure model S3 connection secret exists (cat-dog-detect)
+if ! resource_exists secret cat-dog-detect $NAMESPACE; then
+    echo "Secret 'cat-dog-detect' not found in namespace ${NAMESPACE}. Creating it now..."
     cat <<EOF | oc apply -f -
 apiVersion: v1
 kind: Secret
 metadata:
-  name: cats-and-dogs
+  name: cat-dog-detect
   namespace: ${NAMESPACE}
   labels:
-    app: model-serving
-    model: cats-and-dogs
+    opendatahub.io/dashboard: 'true'
+    opendatahub.io/managed: 'true'
+  annotations:
+    opendatahub.io/connection-type: s3
+    opendatahub.io/connection-type-ref: s3
+    openshift.io/description: ''
+    openshift.io/display-name: cat-dog-detect
 type: Opaque
 data:
   AWS_ACCESS_KEY_ID: bWluaW8=
   AWS_DEFAULT_REGION: dXM=
   AWS_S3_BUCKET: cGlwZWxpbmUtYXJ0aWZhY3Rz
   AWS_S3_ENDPOINT: aHR0cDovL21pbmlvLmljLXNoYXJlZC1yYWctbWluaW8uc3ZjOjkwMDA=
-  AWS_SECRET_ACCESS_KEY: bWluaW8xMjM= #notsecret
+  AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=
 EOF
-    echo "✓ Secret 'cats-and-dogs' created"
+    echo "✓ Secret 'cat-dog-detect' created"
 else
-    echo "✓ Secret 'cats-and-dogs' exists"
+    echo "✓ Secret 'cat-dog-detect' exists"
 fi
 
-echo "Registering 'cats-and-dogs' as an OpenShift AI S3 data connection..."
+echo "Ensuring 'cat-dog-detect' is properly registered as an OpenShift AI S3 data connection..."
 # Label and annotate the secret so it appears as a Data Connection in RHOAI UI and is usable by ModelMesh
-oc label secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/connection-type=s3 opendatahub.io/managed=true --overwrite || true
-oc annotate secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/display-name="Cats and Dogs S3" openshift.io/display-name="cats-and-dogs" --overwrite || true
-echo "✓ Data connection metadata applied to secret 'cats-and-dogs'"
+oc label secret cat-dog-detect -n ${NAMESPACE} opendatahub.io/dashboard='true' opendatahub.io/managed='true' --overwrite || true
+oc annotate secret cat-dog-detect -n ${NAMESPACE} opendatahub.io/connection-type=s3 opendatahub.io/connection-type-ref=s3 openshift.io/description='' openshift.io/display-name=cat-dog-detect --overwrite || true
+echo "✓ Data connection metadata applied to secret 'cat-dog-detect'"
 
 # Check if Tekton is installed
 if ! oc api-resources | grep -q tekton.dev; then
@@ -199,7 +204,7 @@ else
 fi
 
 echo ""
-echo "Step 8: Ensuring InferenceService exists (using cats-and-dogs data connection)..."
+echo "Step 8: Ensuring InferenceService exists (using cat-dog-detect data connection)..."
 if ! resource_exists inferenceservice ${MODEL_NAME} $NAMESPACE; then
     echo "Creating InferenceService '${MODEL_NAME}' in namespace '${NAMESPACE}'"
     cat <<EOF | oc apply -f -
@@ -224,7 +229,7 @@ spec:
         version: "1"
       runtime: ovms
       storage:
-        key: cats-and-dogs
+        key: cat-dog-detect
         path: 02_model_training/models/cats_and_dogs
 EOF
     echo "✓ InferenceService created"
@@ -286,10 +291,13 @@ echo ""
 echo "RESOURCES DEPLOYED:"
 echo "- PVCs: 02-model-training-v2-pvc, model-artifacts-pvc"
 echo "- Pipeline: s3-model-deployment-pipeline"
-echo "- Tasks: s3-model-download-task, openshift-ai-model-deploy-task, expose-model-endpoint-task"
+echo "- Tasks: validate-s3-connection-task, update-inference-service-task, verify-model-deployment-task"
 echo "- EventListener: s3-model-update-listener"
 echo "- Triggers: s3-model-upload-trigger"
 echo "- CronJob: s3-cats-dogs-model-checker (checks every 5 minutes)"
+echo "- Data Connection: cat-dog-detect (S3 connection for model storage)"
+echo "- ServingRuntime: ovms (OpenVINO Model Server)"
+echo "- InferenceService: ${MODEL_NAME} (KServe with ModelMesh)"
 echo ""
 echo "WEBHOOK ENDPOINT:"
 if [ "$WEBHOOK_URL" != "not-ready" ]; then
@@ -303,9 +311,9 @@ echo "HOW IT WORKS:"
 echo "1. Elyra pipeline uploads model files to S3 bucket 'pipeline-artifacts' at path: 02_model_training/models/cats_and_dogs"
 echo "2. CronJob checks S3 every 5 minutes for model updates"
 echo "3. When new/updated model files detected, webhook triggers deployment pipeline"
-echo "4. Pipeline downloads model.bin and model.xml from S3"
-echo "5. Model deployed to OpenShift AI with OpenVINO runtime"
-echo "6. Service and Route created to expose model endpoint"
+echo "4. Pipeline validates S3 connection using cat-dog-detect data connection"
+echo "5. Model deployed to OpenShift AI via KServe InferenceService with OpenVINO runtime"
+echo "6. ModelMesh loads model directly from S3 using cat-dog-detect connection"
 echo ""
 echo "MONITORING:"
 echo "- Pipeline runs: oc get pipelineruns -n ${NAMESPACE}"

@@ -87,27 +87,27 @@ spec:
     - name: AWS_ACCESS_KEY_ID
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_ACCESS_KEY_ID
     - name: AWS_SECRET_ACCESS_KEY
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_SECRET_ACCESS_KEY
     - name: AWS_DEFAULT_REGION
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_DEFAULT_REGION
     - name: AWS_S3_ENDPOINT
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_S3_ENDPOINT
     - name: AWS_S3_BUCKET
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_S3_BUCKET
     script: |
       #!/usr/bin/env python3
@@ -116,7 +116,7 @@ spec:
       from botocore.client import Config
       from botocore.exceptions import ClientError
       
-      print("Validating S3 connection for cats-and-dogs secret...")
+      print("Validating S3 connection for cat-dog-detect secret...")
       
       # S3 configuration from secret
       aws_access_key = os.environ['AWS_ACCESS_KEY_ID']
@@ -205,16 +205,16 @@ spec:
       
       echo "Updating InferenceService for ${MODEL_NAME}..."
       
-      # Validate that the cats-and-dogs secret exists
-      if ! oc get secret cats-and-dogs -n ${NAMESPACE} >/dev/null 2>&1; then
-          echo "Error: Required secret 'cats-and-dogs' not found in namespace ${NAMESPACE}"
+      # Validate that the cat-dog-detect secret exists
+      if ! oc get secret cat-dog-detect -n ${NAMESPACE} >/dev/null 2>&1; then
+          echo "Error: Required secret 'cat-dog-detect' not found in namespace ${NAMESPACE}"
           exit 1
       fi
       
       # Ensure the secret has proper labels and annotations
-      echo "Ensuring cats-and-dogs secret has proper data connection metadata..."
-      oc label secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/connection-type=s3 opendatahub.io/managed=true --overwrite || true
-      oc annotate secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/display-name="Cats and Dogs S3" openshift.io/display-name="cats-and-dogs" --overwrite || true
+      echo "Ensuring cat-dog-detect secret has proper data connection metadata..."
+      oc label secret cat-dog-detect -n ${NAMESPACE} opendatahub.io/dashboard='true' opendatahub.io/managed='true' --overwrite || true
+      oc annotate secret cat-dog-detect -n ${NAMESPACE} opendatahub.io/connection-type=s3 opendatahub.io/connection-type-ref=s3 openshift.io/description='' openshift.io/display-name=cat-dog-detect --overwrite || true
       
       # Check if ServingRuntime exists
       if ! oc get servingruntime ovms -n ${NAMESPACE} >/dev/null 2>&1; then
@@ -246,13 +246,13 @@ spec:
               version: "1"
             runtime: ovms
             storage:
-              key: cats-and-dogs
+              key: cat-dog-detect
               path: ${S3_MODEL_PATH}
       EOF
       
       echo "✓ InferenceService ${MODEL_NAME} updated successfully"
       echo "Model will be loaded from S3 path: ${S3_MODEL_PATH}"
-      echo "Using data connection: cats-and-dogs"
+      echo "Using data connection: cat-dog-detect"
 
 ---
 apiVersion: tekton.dev/v1beta1
@@ -327,7 +327,7 @@ spec:
         model_format: "ONNX"
         runtime: "ovms"
         storage_type: "S3"
-        data_connection: "cats-and-dogs"
+        data_connection: "cat-dog-detect"
         internal_rest_url: "${REST_URL}"
         internal_grpc_url: "${GRPC_URL}"
         ready_status: "${READY_STATUS}"
