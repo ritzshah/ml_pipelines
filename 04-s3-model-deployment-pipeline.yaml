@@ -434,28 +434,17 @@ spec:
       
       echo "Using model directory: ${MODEL_DIR}"
       
-      # Create S3 secret for model serving (compatible with the provided spec)
-      echo "Creating S3 secret for model serving..."
-      cat <<EOF | oc apply -f -
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: ${MODEL_NAME}
-        namespace: ${NAMESPACE}
-        labels:
-          app: model-serving
-          model: ${MODEL_NAME}
-      type: Opaque
-      data:
-        AWS_ACCESS_KEY_ID: bWluaW8=
-        AWS_DEFAULT_REGION: dXM=
-        AWS_S3_BUCKET: cGlwZWxpbmUtYXJ0aWZhY3Rz
-        AWS_S3_ENDPOINT: aHR0cDovL21pbmlvLmljLXNoYXJlZC1yYWctbWluaW8uc3ZjOjkwMDA=
-        AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=
-      EOF
-      
-      
-      # Create InferenceService using existing OVMS runtime  
+      # Validate existing data connection secret
+      echo "Validating 'cats-and-dogs' data connection secret..."
+      if ! oc get secret cats-and-dogs -n ${NAMESPACE} >/dev/null 2>&1; then
+          echo "Error: required secret 'cats-and-dogs' not found in namespace ${NAMESPACE}"
+          exit 1
+      end
+      # Ensure labels/annotations for RHOAI Data Connection
+      oc label secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/connection-type=s3 opendatahub.io/managed=true --overwrite || true
+      oc annotate secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/display-name="Cats and Dogs S3" openshift.io/display-name="cats-and-dogs" --overwrite || true
+
+      # Create InferenceService using OVMS runtime and the data connection
       echo "Creating InferenceService for cats-and-dogs model..."
       cat <<EOF | oc apply -f -
       apiVersion: serving.kserve.io/v1beta1
@@ -477,11 +466,9 @@ spec:
             modelFormat:
               name: openvino_ir
               version: opset1
-            name: ''
-            resources: {}
             runtime: ovms
             storage:
-              key: ${MODEL_NAME}
+              key: cats-and-dogs
               path: 02_model_training/models/cats_and_dogs
       EOF
       
