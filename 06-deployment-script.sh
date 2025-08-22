@@ -48,11 +48,29 @@ if ! resource_exists namespace $NAMESPACE; then
     exit 1
 fi
 
-# Check if secret exists
-if ! resource_exists secret aws-shared-rag-connection $NAMESPACE; then
-    echo "Error: Secret aws-shared-rag-connection does not exist in namespace $NAMESPACE!"
-    echo "Please ensure the S3 connection secret is created."
-    exit 1
+# Ensure model S3 connection secret exists (cats-and-dogs)
+if ! resource_exists secret cats-and-dogs $NAMESPACE; then
+    echo "Secret 'cats-and-dogs' not found in namespace ${NAMESPACE}. Creating it now..."
+    cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cats-and-dogs
+  namespace: ${NAMESPACE}
+  labels:
+    app: model-serving
+    model: cats-and-dogs
+type: Opaque
+data:
+  AWS_ACCESS_KEY_ID: bWluaW8=
+  AWS_DEFAULT_REGION: dXM=
+  AWS_S3_BUCKET: cGlwZWxpbmUtYXJ0aWZhY3Rz
+  AWS_S3_ENDPOINT: aHR0cDovL21pbmlvLmljLXNoYXJlZC1yYWctbWluaW8uc3ZjOjkwMDA=
+  AWS_SECRET_ACCESS_KEY: bWluaW8xMjM= #notsecret
+EOF
+    echo "✓ Secret 'cats-and-dogs' created"
+else
+    echo "✓ Secret 'cats-and-dogs' exists"
 fi
 
 # Check if Tekton is installed
@@ -132,7 +150,7 @@ else
 fi
 
 echo ""
-echo "Step 8: Ensuring InferenceService exists (using aws-shared-rag-connection secret)..."
+echo "Step 8: Ensuring InferenceService exists (using cats-and-dogs secret)..."
 if ! resource_exists inferenceservice ${MODEL_NAME} $NAMESPACE; then
     echo "Creating InferenceService '${MODEL_NAME}' in namespace '${NAMESPACE}'"
     cat <<EOF | oc apply -f -
@@ -157,7 +175,7 @@ spec:
         version: opset1
       runtime: ovms
       storage:
-        key: aws-shared-rag-connection
+        key: cats-and-dogs
         path: 02_model_training/models/cats_and_dogs
 EOF
     echo "✓ InferenceService created"

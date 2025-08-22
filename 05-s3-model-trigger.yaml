@@ -159,27 +159,27 @@ spec:
     - name: AWS_ACCESS_KEY_ID
       valueFrom:
         secretKeyRef:
-          name: aws-shared-rag-connection
+          name: cats-and-dogs
           key: AWS_ACCESS_KEY_ID
     - name: AWS_SECRET_ACCESS_KEY
       valueFrom:
         secretKeyRef:
-          name: aws-shared-rag-connection
+          name: cats-and-dogs
           key: AWS_SECRET_ACCESS_KEY
     - name: AWS_DEFAULT_REGION
       valueFrom:
         secretKeyRef:
-          name: aws-shared-rag-connection
+          name: cats-and-dogs
           key: AWS_DEFAULT_REGION
     - name: AWS_S3_ENDPOINT
       valueFrom:
         secretKeyRef:
-          name: aws-shared-rag-connection
+          name: cats-and-dogs
           key: AWS_S3_ENDPOINT
     - name: AWS_S3_BUCKET
       valueFrom:
         secretKeyRef:
-          name: aws-shared-rag-connection
+          name: cats-and-dogs
           key: AWS_S3_BUCKET
     script: |
       #!/usr/bin/env python3
@@ -201,13 +201,16 @@ spec:
       aws_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
       aws_region = os.environ['AWS_DEFAULT_REGION']
       s3_endpoint = os.environ['AWS_S3_ENDPOINT']
-      # Use the actual bucket name
-      s3_bucket = "pipeline-artifacts"
+      # Use bucket from secret when provided; otherwise default
+      s3_bucket = os.environ.get('AWS_S3_BUCKET', '').strip() or 'pipeline-artifacts'
       
       # Create S3 client
+      endpoint_url = s3_endpoint
+      if not endpoint_url.startswith('http'):
+          endpoint_url = f'https://{endpoint_url}'
       s3_client = boto3.client(
           's3',
-          endpoint_url=f'https://{s3_endpoint}',
+          endpoint_url=endpoint_url,
           aws_access_key_id=aws_access_key,
           aws_secret_access_key=aws_secret_key,
           region_name=aws_region,
