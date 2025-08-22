@@ -105,24 +105,67 @@ metadata:
   name: ovms
   namespace: ${NAMESPACE}
   labels:
+    app.kubernetes.io/instance: ic-shared-rag-llm
+    component: model
+    name: ovms
     opendatahub.io/dashboard: "true"
-    opendatahub.io/recommended: "true"
   annotations:
-    openshift.io/display-name: OpenVINO Model Server
+    enable-route: "true"
+    opendatahub.io/accelerator-name: ""
+    opendatahub.io/template-display-name: OpenVINO Model Server
+    opendatahub.io/template-name: ovms
+    openshift.io/display-name: ovms
 spec:
   supportedModelFormats:
-  - name: openvino_ir
+  - autoSelect: true
+    name: openvino_ir
     version: opset1
-    autoSelect: true
+  - autoSelect: true
+    name: onnx
+    version: "1"
+  - autoSelect: true
+    name: tensorflow
+    version: "2"
+  builtInAdapter:
+    env:
+    - name: OVMS_FORCE_TARGET_DEVICE
+      value: AUTO
+    memBufferBytes: 134217728
+    modelLoadingTimeoutMillis: 90000
+    runtimeManagementPort: 8888
+    serverType: ovms
   multiModel: true
   containers:
   - name: ovms
-    image: openvino/model_server:latest
+    image: quay.io/modh/openvino_model_server@sha256:9086c1ba1ba30d358194c534f0563923aab02d03954e43e9f3647136b44a5daf
     args:
-    - "--port=8085"
+    - "--port=8001"
     - "--rest_port=8888"
+    - "--config_path=/models/model_config_list.json"
     - "--file_system_poll_wait_seconds=0"
-    - "--log_level=INFO"
+    - "--grpc_bind_address=127.0.0.1"
+    - "--rest_bind_address=127.0.0.1"
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: "1"
+        memory: 1Gi
+    volumeMounts:
+    - mountPath: /dev/shm
+      name: shm
+  protocolVersions:
+  - grpc-v1
+  grpcEndpoint: port:8085
+  grpcDataEndpoint: port:8001
+  replicas: 1
+  tolerations: []
+  volumes:
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 2Gi
 EOF
     echo "✓ ServingRuntime 'ovms' created"
 else
@@ -170,15 +213,15 @@ metadata:
     model: ${MODEL_NAME}
     opendatahub.io/dashboard: 'true'
   annotations:
-    openshift.io/display-name: ${MODEL_NAME}
+    openshift.io/display-name: cat-dog-detect
     serving.kserve.io/deploymentMode: ModelMesh
 spec:
   predictor:
     automountServiceAccountToken: false
     model:
       modelFormat:
-        name: openvino_ir
-        version: opset1
+        name: onnx
+        version: "1"
       runtime: ovms
       storage:
         key: cats-and-dogs

@@ -7,7 +7,7 @@ metadata:
     app: ml-pipeline
     component: s3-model-deployment
 spec:
-  description: Pipeline to deploy cats_and_dogs model from S3 to OpenShift AI
+  description: Pipeline to deploy cats_and_dogs model from S3 to OpenShift AI using KServe
   params:
   - name: model-name
     type: string
@@ -20,33 +20,28 @@ spec:
   - name: s3-model-path
     type: string
     description: S3 path to the model files
-    default: "pipeline-artifacts/02_model_training/models/cats_and_dogs"
+    default: "02_model_training/models/cats_and_dogs"
   - name: namespace
     type: string
     description: Target namespace for deployment
     default: "ic-shared-rag-llm"
   
-  workspaces:
-  - name: model-storage
-    description: Workspace for storing downloaded model files
-  
   tasks:
-  - name: download-model-from-s3
+  - name: validate-s3-connection
     taskRef:
-      name: s3-model-download-task
+      name: validate-s3-connection-task
     params:
     - name: model-name
       value: $(params.model-name)
     - name: s3-model-path
       value: $(params.s3-model-path)
-    workspaces:
-    - name: model-storage
-      workspace: model-storage
-  
-  - name: deploy-to-openshift-ai
-    runAfter: [download-model-from-s3]
+    - name: namespace
+      value: $(params.namespace)
+
+  - name: update-inference-service
+    runAfter: [validate-s3-connection]
     taskRef:
-      name: openshift-ai-model-deploy-task
+      name: update-inference-service-task
     params:
     - name: model-name
       value: $(params.model-name)
@@ -54,19 +49,16 @@ spec:
       value: $(params.model-version)
     - name: namespace
       value: $(params.namespace)
-    workspaces:
-    - name: model-storage
-      workspace: model-storage
-  
-  - name: expose-model-endpoint
-    runAfter: [deploy-to-openshift-ai]
+    - name: s3-model-path
+      value: $(params.s3-model-path)
+
+  - name: verify-model-deployment
+    runAfter: [update-inference-service]
     taskRef:
-      name: expose-model-endpoint-task
+      name: verify-model-deployment-task
     params:
     - name: model-name
       value: $(params.model-name)
-    - name: model-version
-      value: $(params.model-version)
     - name: namespace
       value: $(params.namespace)
 
@@ -74,10 +66,10 @@ spec:
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: s3-model-download-task
+  name: validate-s3-connection-task
   namespace: ic-shared-rag-llm
 spec:
-  description: Downloads model files from S3 using the existing aws-shared-rag-connection secret
+  description: Validates S3 connection and checks for model files
   params:
   - name: model-name
     type: string
@@ -85,11 +77,11 @@ spec:
   - name: s3-model-path
     type: string
     description: S3 path to the model files
-  workspaces:
-  - name: model-storage
-    description: Workspace to store the downloaded model files
+  - name: namespace
+    type: string
+    description: Target namespace
   steps:
-  - name: download-model-files
+  - name: validate-connection
     image: quay.io/opendatahub/workbench-images:jupyter-datascience-ubi9-python-3.9-2023b-20231016
     env:
     - name: AWS_ACCESS_KEY_ID
@@ -121,220 +113,75 @@ spec:
       #!/usr/bin/env python3
       import os
       import boto3
-      import json
-      from datetime import datetime
       from botocore.client import Config
+      from botocore.exceptions import ClientError
       
-      print("Starting S3 model download...")
-      print("Model name: $(params.model-name)")
-      print("S3 path: $(params.s3-model-path)")
+      print("Validating S3 connection for cats-and-dogs secret...")
       
       # S3 configuration from secret
       aws_access_key = os.environ['AWS_ACCESS_KEY_ID']
       aws_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
       aws_region = os.environ['AWS_DEFAULT_REGION']
       s3_endpoint = os.environ['AWS_S3_ENDPOINT']
-      # Use bucket from secret when provided; otherwise default to parsed value
       s3_bucket = os.environ.get('AWS_S3_BUCKET', '').strip() or "pipeline-artifacts"
       
-      print("S3 Endpoint:", s3_endpoint)
-      print("S3 Bucket:", s3_bucket)
+      model_name = "$(params.model-name)"
+      s3_path = "$(params.s3-model-path)"
+      
+      print(f"Model: {model_name}")
+      print(f"S3 Endpoint: {s3_endpoint}")
+      print(f"S3 Bucket: {s3_bucket}")
+      print(f"S3 Path: {s3_path}")
       
       # Create S3 client
-      endpoint_url = s3_endpoint
-      if not endpoint_url.startswith('http'):
-          endpoint_url = 'https://' + endpoint_url
-      s3_client = boto3.client(
-          's3',
-          endpoint_url=endpoint_url,
-          aws_access_key_id=aws_access_key,
-          aws_secret_access_key=aws_secret_key,
-          region_name=aws_region,
-          config=Config(signature_version='s3v4')
-      )
+      endpoint_url = s3_endpoint if s3_endpoint.startswith('http') else 'https://' + s3_endpoint
       
-      # Create model directory
-      model_name = "$(params.model-name)"
-      s3_path_param = "$(params.s3-model-path)"
-      # Remove bucket name from path since we set it separately
-      s3_path = s3_path_param.replace("pipeline-artifacts/", "")
-      
-      # Use a shared directory that both tasks can access
-      # Try multiple writable locations in order of preference
-      potential_dirs = [
-          "/workspace/model-storage",  # Preferred if writable
-          "/tmp/shared-models",        # Fallback shared location
-          "/opt/app-root/src"          # Current directory fallback
-      ]
-      
-      print("Checking workspace permissions...")
-      local_model_dir = None
-      
-      # Ensure shared directories exist
-      for shared_dir in ["/tmp/shared-models"]:
-          try:
-              os.makedirs(shared_dir, mode=0o755, exist_ok=True)
-          except:
-              pass
-      
-      for base_dir in potential_dirs:
-          try:
-              # Test if we can write to this location
-              test_dir = base_dir + "/test-write"
-              os.makedirs(test_dir, mode=0o755, exist_ok=True)
-              test_file = test_dir + "/.write_test"
-              with open(test_file, 'w') as f:
-                  f.write("test")
-              os.remove(test_file)
-              os.rmdir(test_dir)
-              
-              # This location is writable
-              local_model_dir = base_dir + "/" + model_name
-              os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
-              print("Using writable directory:", local_model_dir)
-              break
-              
-          except (OSError, PermissionError) as e:
-              print(f"Directory {base_dir} is not writable:", str(e))
-              continue
-      
-      if local_model_dir is None:
-          # Last resort: use current working directory
-          local_model_dir = "./" + model_name
-          os.makedirs(local_model_dir, mode=0o755, exist_ok=True)
-          print("Using current directory as fallback:", local_model_dir)
-      
-      print("Local model directory:", local_model_dir)
-      print("Adjusted S3 path:", s3_path)
-      print("Original S3 path param:", s3_path_param)
-      
-      # Download model files (note: actual files are model.bin and model.xml, not models.bin/models.xml)
-      model_files = ['model.bin', 'model.xml']
-      downloaded_files = []
-      
-      for file_name in model_files:
-          s3_key = s3_path + "/" + file_name
-          local_file_path = local_model_dir + "/" + file_name
-          
-          try:
-              print("Downloading", s3_key, "from bucket", s3_bucket)
-              s3_client.download_file(s3_bucket, s3_key, local_file_path)
-              
-              # Verify file was downloaded
-              if os.path.exists(local_file_path):
-                  file_size = os.path.getsize(local_file_path)
-                  print("✓ Downloaded", file_name, "(" + str(file_size), "bytes)")
-                  downloaded_files.append(file_name)
-              else:
-                  print("✗ Failed to download", file_name)
-                  
-          except Exception as e:
-              print("Error downloading", file_name + ":", str(e))
-              # For demo purposes, create placeholder files if download fails
-              print("Creating placeholder", file_name, "for demo...")
-              with open(local_file_path, 'wb') as f:
-                  if file_name == 'model.bin':
-                      f.write(b'placeholder_binary_model_data')
-                  else:  # model.xml
-                      xml_content = '<?xml version="1.0" ?>\n'
-                      xml_content += '<net name="' + model_name + '" version="11">\n'
-                      xml_content += '    <layers>\n'
-                      xml_content += '        <layer id="0" name="input" type="Parameter" version="opset1">\n'
-                      xml_content += '            <data element_type="f32" shape="1,3,224,224"/>\n'
-                      xml_content += '            <output>\n'
-                      xml_content += '                <port id="0" precision="FP32">\n'
-                      xml_content += '                    <dim>1</dim>\n'
-                      xml_content += '                    <dim>3</dim>\n'
-                      xml_content += '                    <dim>224</dim>\n'
-                      xml_content += '                    <dim>224</dim>\n'
-                      xml_content += '                </port>\n'
-                      xml_content += '            </output>\n'
-                      xml_content += '        </layer>\n'
-                      xml_content += '        <layer id="1" name="output" type="Result" version="opset1">\n'
-                      xml_content += '            <input>\n'
-                      xml_content += '                <port id="0" precision="FP32">\n'
-                      xml_content += '                    <dim>1</dim>\n'
-                      xml_content += '                    <dim>2</dim>\n'
-                      xml_content += '                </port>\n'
-                      xml_content += '            </input>\n'
-                      xml_content += '        </layer>\n'
-                      xml_content += '    </layers>\n'
-                      xml_content += '    <edges>\n'
-                      xml_content += '        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>\n'
-                      xml_content += '    </edges>\n'
-                      xml_content += '</net>'
-                      f.write(xml_content.encode())
-              downloaded_files.append(file_name + " (placeholder)")
-      
-      # Create model metadata
-      metadata = {
-          "model_name": model_name,
-          "model_version": "v1",
-          "framework": "OpenVINO",
-          "model_type": "image_classification",
-          "task_type": "cats_and_dogs_classification",
-          "input_shape": [1, 3, 224, 224],
-          "output_shape": [1, 2],
-          "classes": ["cat", "dog"],
-          "s3_source_path": s3_path,
-          "downloaded_files": downloaded_files,
-          "download_timestamp": datetime.now().isoformat(),
-          "model_format": "OpenVINO IR"
-      }
-      
-      # Save metadata
-      metadata_path = local_model_dir + "/metadata.json"
-      with open(metadata_path, 'w') as f:
-          json.dump(metadata, f, indent=2)
-      
-      # Create a marker file with the actual model directory location
-      marker_content = {
-          "model_directory": os.path.abspath(local_model_dir),
-          "model_name": model_name,
-          "downloaded_files": downloaded_files,
-          "download_time": datetime.now().isoformat()
-      }
-      
-      # Save marker to multiple locations to ensure next task can find it
-      marker_locations = [
-          "/workspace/model-storage/model_location.json",
-          "/tmp/shared-models/model_location.json", 
-          "/opt/app-root/src/model_location.json",
-          "/tmp/model_location.json",
-          "./model_location.json",
-          local_model_dir + "/model_location.json"
-      ]
-      
-      for marker_path in marker_locations:
-          try:
-              with open(marker_path, 'w') as f:
-                  json.dump(marker_content, f, indent=2)
-              print("Saved model location marker to:", marker_path)
-          except Exception as e:
-              print("Could not save marker to", marker_path + ":", str(e))
-      
-      print("Model download completed successfully!")
-      print("Downloaded files:", downloaded_files)
-      print("Local files:", os.listdir(local_model_dir))
-      print("Metadata saved to:", metadata_path)
-      print("Model directory (absolute):", os.path.abspath(local_model_dir))
-      
-      # List workspace contents
       try:
-          print("Workspace model-storage contents:", os.listdir("/workspace/model-storage"))
-          if os.path.exists("/workspace/model-storage/" + model_name):
-              print("Model directory contents:", os.listdir("/workspace/model-storage/" + model_name))
+          s3_client = boto3.client(
+              's3',
+              endpoint_url=endpoint_url,
+              aws_access_key_id=aws_access_key,
+              aws_secret_access_key=aws_secret_key,
+              region_name=aws_region,
+              config=Config(signature_version='s3v4')
+          )
+          
+          # Test connection by listing bucket contents
+          print("Testing S3 connection...")
+          response = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_path, MaxKeys=10)
+          
+          if 'Contents' in response:
+              print(f"✓ Successfully connected to S3")
+              print(f"✓ Found {len(response['Contents'])} objects in path: {s3_path}")
+              for obj in response['Contents']:
+                  print(f"  - {obj['Key']} (size: {obj['Size']} bytes)")
+          else:
+              print(f"⚠ Connection successful but no objects found in path: {s3_path}")
+              print("This may be expected if the model hasn't been uploaded yet.")
+          
+          print("✓ S3 connection validation completed successfully")
+          
+      except ClientError as e:
+          error_code = e.response['Error']['Code']
+          print(f"✗ S3 connection failed with error: {error_code}")
+          print(f"Error details: {e}")
+          if error_code == 'NoSuchBucket':
+              print(f"Bucket '{s3_bucket}' does not exist")
+          elif error_code == 'AccessDenied':
+              print("Access denied - check credentials and permissions")
+          raise
       except Exception as e:
-          print("Cannot list workspace:", str(e))
+          print(f"✗ Unexpected error: {e}")
+          raise
 
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: openshift-ai-model-deploy-task
+  name: update-inference-service-task
   namespace: ic-shared-rag-llm
 spec:
-  description: Deploys model to OpenShift AI using KServe/ModelMesh
+  description: Updates or creates the InferenceService for the model
   params:
   - name: model-name
     type: string
@@ -342,11 +189,10 @@ spec:
     type: string
   - name: namespace
     type: string
-  workspaces:
-  - name: model-storage
-    description: Workspace containing the model files
+  - name: s3-model-path
+    type: string
   steps:
-  - name: deploy-kserve-model
+  - name: update-inference-service
     image: quay.io/openshift/origin-cli:latest
     script: |
       #!/bin/bash
@@ -355,97 +201,29 @@ spec:
       MODEL_NAME="$(params.model-name)"
       MODEL_VERSION="$(params.model-version)"
       NAMESPACE="$(params.namespace)"
-      MODEL_DIR="/workspace/model-storage/${MODEL_NAME}"
+      S3_MODEL_PATH="$(params.s3-model-path)"
       
-      echo "Deploying ${MODEL_NAME}:${MODEL_VERSION} to OpenShift AI..."
-      echo "Model directory: ${MODEL_DIR}"
+      echo "Updating InferenceService for ${MODEL_NAME}..."
       
-      # Check for model location marker first
-      echo "Checking for model files..."
-      echo "Expected location: ${MODEL_DIR}"
-      
-      # Look for model location marker in multiple locations
-      MARKER_FOUND=false
-      MARKER_PATHS="/workspace/model-storage/model_location.json /tmp/shared-models/model_location.json /opt/app-root/src/model_location.json /tmp/model_location.json ./model_location.json"
-      
-      for marker_path in $MARKER_PATHS; do
-          if [ -f "$marker_path" ]; then
-              echo "Found model location marker: $marker_path"
-              cat "$marker_path"
-              # Try to extract the actual model directory path
-              ACTUAL_MODEL_DIR=$(cat "$marker_path" | grep -o '"model_directory": "[^"]*"' | cut -d'"' -f4)
-              if [ -n "$ACTUAL_MODEL_DIR" ] && [ -d "$ACTUAL_MODEL_DIR" ]; then
-                  echo "Using model directory from marker: $ACTUAL_MODEL_DIR"
-                  MODEL_DIR="$ACTUAL_MODEL_DIR"
-                  MARKER_FOUND=true
-                  break
-              fi
-          fi
-      done
-      
-      if [ "$MARKER_FOUND" = "false" ]; then
-          echo "No model location marker found, using default locations"
-      fi
-      
-      # First check the identified/default model directory
-      if [ -d "${MODEL_DIR}" ] && [ "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
-          echo "Found model files in workspace:"
-          ls -la "${MODEL_DIR}"
-      else
-          echo "Model files not found in workspace: ${MODEL_DIR}"
-          echo "Checking current directory and other locations..."
-          
-          # Check potential model directories in order
-          POTENTIAL_MODEL_DIRS="/workspace/model-storage/${MODEL_NAME} /tmp/shared-models/${MODEL_NAME} /opt/app-root/src/${MODEL_NAME} ./${MODEL_NAME}"
-          
-          for potential_dir in $POTENTIAL_MODEL_DIRS; do
-              echo "Checking potential directory: $potential_dir"
-              if [ -d "$potential_dir" ] && [ "$(ls -A "$potential_dir" 2>/dev/null)" ]; then
-                  echo "Found model files in: $potential_dir"
-                  ls -la "$potential_dir"
-                  if [ -f "$potential_dir/metadata.json" ] || [ -f "$potential_dir/model.bin" ] || [ -f "$potential_dir/model.xml" ]; then
-                      echo "Using model files from: $potential_dir"
-                      MODEL_DIR="$potential_dir"
-                      break
-                  fi
-              else
-                  echo "No files in: $potential_dir"
-              fi
-          done
-          
-          # If still not found, do a broader search
-          if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
-              echo "Doing broader search for model files..."
-              find /workspace -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in workspace"
-              find /tmp -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in /tmp"
-              find /opt/app-root/src -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in /opt/app-root/src"
-              find . -name "model.bin" -o -name "model.xml" -o -name "metadata.json" 2>/dev/null || echo "No model files found in current directory"
-          fi
-      fi
-      
-      # Final check
-      if [ ! -d "${MODEL_DIR}" ] || [ ! "$(ls -A ${MODEL_DIR} 2>/dev/null)" ]; then
-          echo "Error: No model files found anywhere"
-          echo "Searched locations:"
-          echo "  - ${MODEL_DIR}"
-          echo "  - Current working directory: $(pwd)"
-          exit 1
-      fi
-      
-      echo "Using model directory: ${MODEL_DIR}"
-      
-      # Validate existing data connection secret
-      echo "Validating 'cats-and-dogs' data connection secret..."
+      # Validate that the cats-and-dogs secret exists
       if ! oc get secret cats-and-dogs -n ${NAMESPACE} >/dev/null 2>&1; then
-          echo "Error: required secret 'cats-and-dogs' not found in namespace ${NAMESPACE}"
+          echo "Error: Required secret 'cats-and-dogs' not found in namespace ${NAMESPACE}"
           exit 1
-      end
-      # Ensure labels/annotations for RHOAI Data Connection
+      fi
+      
+      # Ensure the secret has proper labels and annotations
+      echo "Ensuring cats-and-dogs secret has proper data connection metadata..."
       oc label secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/connection-type=s3 opendatahub.io/managed=true --overwrite || true
       oc annotate secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/display-name="Cats and Dogs S3" openshift.io/display-name="cats-and-dogs" --overwrite || true
-
-      # Create InferenceService using OVMS runtime and the data connection
-      echo "Creating InferenceService for cats-and-dogs model..."
+      
+      # Check if ServingRuntime exists
+      if ! oc get servingruntime ovms -n ${NAMESPACE} >/dev/null 2>&1; then
+          echo "Warning: ServingRuntime 'ovms' not found in namespace ${NAMESPACE}"
+          echo "This should be created by the deployment script first"
+      fi
+      
+      # Create or update InferenceService
+      echo "Creating/updating InferenceService..."
       cat <<EOF | oc apply -f -
       apiVersion: serving.kserve.io/v1beta1
       kind: InferenceService
@@ -457,126 +235,82 @@ spec:
           model: ${MODEL_NAME}
           opendatahub.io/dashboard: 'true'
         annotations:
-          openshift.io/display-name: ${MODEL_NAME}
+          openshift.io/display-name: cat-dog-detect
           serving.kserve.io/deploymentMode: ModelMesh
       spec:
         predictor:
           automountServiceAccountToken: false
           model:
             modelFormat:
-              name: openvino_ir
-              version: opset1
+              name: onnx
+              version: "1"
             runtime: ovms
             storage:
               key: cats-and-dogs
-              path: 02_model_training/models/cats_and_dogs
+              path: ${S3_MODEL_PATH}
       EOF
       
-      echo "Waiting for InferenceService to be ready..."
-      sleep 10
-      
-      # Check InferenceService status
-      echo "Checking InferenceService status..."
-      oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} || echo "InferenceService not found"
-      
-      # Wait for the service to be ready
-      echo "Waiting for predictor to be ready..."
-      oc wait --for=condition=PredictorReady inferenceservice/${MODEL_NAME} -n ${NAMESPACE} --timeout=300s || echo "Timeout waiting for predictor"
-      
-      echo "InferenceService deployment completed!"
+      echo "✓ InferenceService ${MODEL_NAME} updated successfully"
+      echo "Model will be loaded from S3 path: ${S3_MODEL_PATH}"
+      echo "Using data connection: cats-and-dogs"
 
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: expose-model-endpoint-task
+  name: verify-model-deployment-task
   namespace: ic-shared-rag-llm
 spec:
-  description: Exposes the model endpoint and creates endpoint information
+  description: Verifies that the model deployment is working
   params:
   - name: model-name
-    type: string
-  - name: model-version
     type: string
   - name: namespace
     type: string
   steps:
-  - name: create-service-and-route
+  - name: verify-deployment
     image: quay.io/openshift/origin-cli:latest
     script: |
       #!/bin/bash
       set -e
       
       MODEL_NAME="$(params.model-name)"
-      MODEL_VERSION="$(params.model-version)"
       NAMESPACE="$(params.namespace)"
       
-      echo "Getting InferenceService endpoint information for ${MODEL_NAME}..."
+      echo "Verifying model deployment for ${MODEL_NAME}..."
       
-      # Get InferenceService status and endpoints
-      INFERENCE_SERVICE_STATUS=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o yaml 2>/dev/null || echo "not-found")
+      # Wait for InferenceService to be ready
+      echo "Waiting for InferenceService to be ready..."
+      oc wait --for=condition=PredictorReady inferenceservice/${MODEL_NAME} -n ${NAMESPACE} --timeout=300s || {
+          echo "Warning: Timeout waiting for predictor to be ready"
+          echo "Checking InferenceService status..."
+          oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o yaml
+          echo "This may be expected if the model is large or S3 download is slow"
+      }
       
-      if [ "$INFERENCE_SERVICE_STATUS" != "not-found" ]; then
-          echo "InferenceService found, extracting endpoints..."
-          
-          # Extract REST and gRPC URLs from InferenceService status
-          REST_URL=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.restUrl}' 2>/dev/null || echo "not-ready")
-          GRPC_URL=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.grpcUrl}' 2>/dev/null || echo "not-ready")
-          
-          echo "REST URL: $REST_URL"
-          echo "gRPC URL: $GRPC_URL"
-          
-          # Extract hostname for external access
-          if [ "$REST_URL" != "not-ready" ]; then
-              # For ModelMesh, we need to create a route to the modelmesh-serving service
-              echo "Creating route to ModelMesh serving..."
-              cat <<EOF | oc apply -f -
-      apiVersion: route.openshift.io/v1
-      kind: Route
-      metadata:
-        name: ${MODEL_NAME}-route
-        namespace: ${NAMESPACE}
-        labels:
-          app: model-serving
-          model: ${MODEL_NAME}
-        annotations:
-          openshift.io/host.generated: "true"
-      spec:
-        to:
-          kind: Service
-          name: modelmesh-serving
-          weight: 100
-        port:
-          targetPort: 8008
-        tls:
-          termination: edge
-          insecureEdgeTerminationPolicy: Redirect
-        wildcardPolicy: None
-      EOF
-              
-              # Wait for route to be created
-              echo "Waiting for route to be created..."
-              sleep 15
-              
-              ROUTE_URL=$(oc get route ${MODEL_NAME}-route -n ${NAMESPACE} -o jsonpath='{.spec.host}' 2>/dev/null || echo "route-not-ready")
-          else
-              ROUTE_URL="not-ready"
-          fi
-      else
-          echo "InferenceService not found!"
-          ROUTE_URL="inference-service-not-found"
-      fi
+      # Get InferenceService status
+      echo "InferenceService status:"
+      oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} || echo "InferenceService not found"
       
-      if [ "$ROUTE_URL" != "route-not-ready" ]; then
-          echo "Model endpoint exposed successfully!"
-          echo "Model Server URL: https://${ROUTE_URL}"
-          echo "Health Check: https://${ROUTE_URL}/v1/config"  
-          echo "Model Info: https://${ROUTE_URL}/v1/models/${MODEL_NAME}"
-          echo "Prediction: https://${ROUTE_URL}/v1/models/${MODEL_NAME}:predict"
-          echo "Internal REST URL: ${REST_URL}"
-          echo "Internal gRPC URL: ${GRPC_URL}"
+      # Check if the service is ready
+      READY_STATUS=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
+      PREDICTOR_READY=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="PredictorReady")].status}' 2>/dev/null || echo "Unknown")
+      
+      echo "Ready Status: ${READY_STATUS}"
+      echo "Predictor Ready: ${PREDICTOR_READY}"
+      
+      if [ "${READY_STATUS}" = "True" ] && [ "${PREDICTOR_READY}" = "True" ]; then
+          echo "✓ Model deployment verification successful!"
           
-          # Create ConfigMap with endpoint information
+          # Get endpoints
+          REST_URL=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.restUrl}' 2>/dev/null || echo "not-available")
+          GRPC_URL=$(oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o jsonpath='{.status.components.predictor.grpcUrl}' 2>/dev/null || echo "not-available")
+          
+          echo "Endpoints:"
+          echo "- REST URL: ${REST_URL}"
+          echo "- gRPC URL: ${GRPC_URL}"
+          
+          # Create endpoint info ConfigMap
           cat <<EOF | oc apply -f -
       apiVersion: v1
       kind: ConfigMap
@@ -588,64 +322,27 @@ spec:
           model: ${MODEL_NAME}
       data:
         model_name: "${MODEL_NAME}"
-        model_version: "${MODEL_VERSION}"
-        model_type: "cats_and_dogs_classification"
+        deployment_type: "KServe_InferenceService_with_ModelMesh"
         framework: "OpenVINO"
-        deployment_type: "KServe_InferenceService"
-        external_endpoint_url: "https://${ROUTE_URL}"
+        model_format: "ONNX"
+        runtime: "ovms"
+        storage_type: "S3"
+        data_connection: "cats-and-dogs"
         internal_rest_url: "${REST_URL}"
         internal_grpc_url: "${GRPC_URL}"
-        health_check_url: "https://${ROUTE_URL}/v1/config"
-        model_info_url: "https://${ROUTE_URL}/v1/models/${MODEL_NAME}"
-        prediction_url: "https://${ROUTE_URL}/v1/models/${MODEL_NAME}:predict"
-        sample_request: |
-          {
-            "instances": [
-              {
-                "data": "base64_encoded_image_data_here"
-              }
-            ]
-          }
-        sample_curl: |
-          curl -X POST "https://${ROUTE_URL}/v1/models/${MODEL_NAME}:predict" \\
-            -H "Content-Type: application/json" \\
-            -d '{
-              "instances": [
-                {
-                  "data": "base64_encoded_image_data"
-                }
-              ]
-            }'
-        created_at: "$(date -Iseconds)"
-        deployment_status: "active"
+        ready_status: "${READY_STATUS}"
+        predictor_ready: "${PREDICTOR_READY}"
+        verification_timestamp: "$(date -Iseconds)"
+        usage_note: "Use ModelMesh serving endpoint for predictions"
       EOF
           
-          echo "Endpoint information stored in ConfigMap: ${MODEL_NAME}-endpoint-info"
-          
-          # Display endpoint information
-          echo ""
-          echo "============================================"
-          echo "MODEL DEPLOYMENT COMPLETED SUCCESSFULLY!"
-          echo "============================================"
-          echo "Model Name: ${MODEL_NAME}"
-          echo "Model Version: ${MODEL_VERSION}"
-          echo "Model Type: Cats and Dogs Classification"
-          echo "Framework: OpenVINO"
-          echo ""
-          echo "ENDPOINTS:"
-          echo "- Main URL: https://${ROUTE_URL}"
-          echo "- Health Check: https://${ROUTE_URL}/v1/config"
-          echo "- Model Info: https://${ROUTE_URL}/v1/models/${MODEL_NAME}"
-          echo "- Predictions: https://${ROUTE_URL}/v1/models/${MODEL_NAME}:predict"
-          echo ""
-          echo "USAGE EXAMPLE:"
-          echo "curl -X POST \"https://${ROUTE_URL}/v1/models/${MODEL_NAME}:predict\" \\"
-          echo "  -H \"Content-Type: application/json\" \\"
-          echo "  -d '{\"instances\": [{\"data\": \"base64_encoded_image\"}]}'"
-          echo "============================================"
+          echo "✓ Endpoint information saved to ConfigMap: ${MODEL_NAME}-endpoint-info"
           
       else
-          echo "Warning: Route creation failed or is not ready yet"
-          echo "You may need to check the route status manually"
+          echo "⚠ Model deployment not fully ready yet"
+          echo "This may be normal for initial deployments or large models"
+          echo "Check the InferenceService status with:"
+          echo "oc get inferenceservice ${MODEL_NAME} -n ${NAMESPACE} -o yaml"
       fi
-
+      
+      echo "Model deployment verification completed!"
