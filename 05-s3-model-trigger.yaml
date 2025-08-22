@@ -159,27 +159,27 @@ spec:
     - name: AWS_ACCESS_KEY_ID
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_ACCESS_KEY_ID
     - name: AWS_SECRET_ACCESS_KEY
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_SECRET_ACCESS_KEY
     - name: AWS_DEFAULT_REGION
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_DEFAULT_REGION
     - name: AWS_S3_ENDPOINT
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_S3_ENDPOINT
     - name: AWS_S3_BUCKET
       valueFrom:
         secretKeyRef:
-          name: cats-and-dogs
+          name: cat-dog-detect
           key: AWS_S3_BUCKET
     script: |
       #!/usr/bin/env python3
@@ -397,27 +397,27 @@ spec:
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
-                  name: aws-shared-rag-connection
+                  name: cat-dog-detect
                   key: AWS_ACCESS_KEY_ID
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: aws-shared-rag-connection
+                  name: cat-dog-detect
                   key: AWS_SECRET_ACCESS_KEY
             - name: AWS_DEFAULT_REGION
               valueFrom:
                 secretKeyRef:
-                  name: aws-shared-rag-connection
+                  name: cat-dog-detect
                   key: AWS_DEFAULT_REGION
             - name: AWS_S3_ENDPOINT
               valueFrom:
                 secretKeyRef:
-                  name: aws-shared-rag-connection
+                  name: cat-dog-detect
                   key: AWS_S3_ENDPOINT
             - name: AWS_S3_BUCKET
               valueFrom:
                 secretKeyRef:
-                  name: aws-shared-rag-connection
+                  name: cat-dog-detect
                   key: AWS_S3_BUCKET
             command:
             - /bin/bash
@@ -503,85 +503,3 @@ spec:
                   print('No recent model updates found.')
               "
           restartPolicy: OnFailure
-
----
-# ServiceAccount for Tekton Triggers
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: tekton-triggers-sa
-  namespace: ic-shared-rag-llm
-  labels:
-    app: s3-model-deployment-trigger
-
----
-# Role with necessary permissions
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: tekton-triggers-role
-  namespace: ic-shared-rag-llm
-rules:
-- apiGroups: [""]
-  resources: ["configmaps", "secrets", "services", "persistentvolumeclaims"]
-  verbs: ["get", "list", "create", "update", "delete", "patch"]
-- apiGroups: ["apps"]
-  resources: ["deployments"]
-  verbs: ["get", "list", "create", "update", "delete", "patch"]
-- apiGroups: ["route.openshift.io"]
-  resources: ["routes"]
-  verbs: ["get", "list", "create", "update", "delete", "patch"]
-- apiGroups: ["tekton.dev"]
-  resources: ["pipelineruns", "taskruns", "pipelines", "tasks"]
-  verbs: ["get", "list", "create", "update", "delete", "patch"]
-- apiGroups: ["triggers.tekton.dev"]
-  resources: ["eventlisteners", "triggerbindings", "triggertemplates", "triggers", "interceptors"]
-  verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]
-- apiGroups: ["serving.kserve.io"]
-  resources: ["inferenceservices", "servingruntimes"]
-  verbs: ["get", "list", "create", "update", "delete", "patch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "create", "update", "delete", "patch"]
-
----
-# ClusterRole for cluster-scoped resources
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: tekton-triggers-cluster-role
-rules:
-- apiGroups: ["triggers.tekton.dev"]
-  resources: ["clusterinterceptors"]
-  verbs: ["get", "list", "watch"]
-
----
-# RoleBinding to bind the role to the service account
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: tekton-triggers-binding
-  namespace: ic-shared-rag-llm
-subjects:
-- kind: ServiceAccount
-  name: tekton-triggers-sa
-  namespace: ic-shared-rag-llm
-roleRef:
-  kind: Role
-  name: tekton-triggers-role
-  apiGroup: rbac.authorization.k8s.io
-
----
-# ClusterRoleBinding for cluster-scoped resources
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: tekton-triggers-cluster-binding
-subjects:
-- kind: ServiceAccount
-  name: tekton-triggers-sa
-  namespace: ic-shared-rag-llm
-roleRef:
-  kind: ClusterRole
-  name: tekton-triggers-cluster-role
-  apiGroup: rbac.authorization.k8s.io

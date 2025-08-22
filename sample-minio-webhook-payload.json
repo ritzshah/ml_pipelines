@@ -1,0 +1,53 @@
+{
+  "EventName": "s3:ObjectCreated:Put",
+  "Key": "pipeline-artifacts/02_model_training/models/cats_and_dogs/model.bin",
+  "Records": [
+    {
+      "eventVersion": "2.0",
+      "eventSource": "minio:s3",
+      "awsRegion": "us-east-1",
+      "eventTime": "2025-08-22T10:30:00.000Z",
+      "eventName": "s3:ObjectCreated:Put",
+      "userIdentity": {
+        "principalId": "minio"
+      },
+      "requestParameters": {
+        "principalId": "minio",
+        "region": "us-east-1",
+        "sourceIPAddress": "10.0.0.1"
+      },
+      "responseElements": {
+        "content-length": "1024",
+        "x-amz-request-id": "17C2679C5C35B7A4",
+        "x-minio-deployment-id": "deployment-id",
+        "x-minio-origin-endpoint": "http://minio.ic-shared-rag-minio.svc:9000"
+      },
+      "s3": {
+        "s3SchemaVersion": "1.0",
+        "configurationId": "Config",
+        "bucket": {
+          "name": "pipeline-artifacts",
+          "ownerIdentity": {
+            "principalId": "minio"
+          },
+          "arn": "arn:aws:s3:::pipeline-artifacts"
+        },
+        "object": {
+          "key": "02_model_training/models/cats_and_dogs/model.bin",
+          "size": 1024,
+          "eTag": "d41d8cd98f00b204e9800998ecf8427e",
+          "contentType": "application/octet-stream",
+          "userMetadata": {
+            "content-type": "application/octet-stream"
+          },
+          "sequencer": "17C2679C5C35B7A4"
+        }
+      },
+      "source": {
+        "host": "10.0.0.1",
+        "port": "",
+        "userAgent": "MinIO Console"
+      }
+    }
+  ]
+}

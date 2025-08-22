@@ -94,12 +94,17 @@ fi
 echo "✓ Prerequisites verified"
 
 echo ""
-echo "Step 2: Deploying PVCs..."
+echo "Step 2: Fixing Tekton Triggers RBAC permissions..."
+oc apply -f 10-tekton-triggers-rbac-fix.yaml
+echo "✓ Tekton Triggers RBAC configured"
+
+echo ""
+echo "Step 3: Deploying PVCs..."
 oc apply -f 01-model-training-pvc.yaml
 echo "✓ PVCs deployed"
 
 echo ""
-echo "Step 3: Verifying/creating ServingRuntime (ovms)..."
+echo "Step 4: Verifying/creating ServingRuntime (ovms)..."
 # Ensure ServingRuntime 'ovms' exists in target namespace (used by InferenceService)
 if ! resource_exists servingruntime ovms $NAMESPACE; then
     echo "ServingRuntime 'ovms' not found in namespace ${NAMESPACE}. Creating OVMS runtime..."
@@ -178,22 +183,22 @@ else
 fi
 
 echo ""
-echo "Step 4: Deploying S3 Model Deployment Pipeline..."
+echo "Step 5: Deploying S3 Model Deployment Pipeline..."
 oc apply -f 04-s3-model-deployment-pipeline.yaml
 echo "✓ S3 Model Deployment Pipeline deployed"
 
 echo ""
-echo "Step 5: Deploying Tekton Triggers..."
+echo "Step 6: Deploying Tekton Triggers..."
 oc apply -f 05-s3-model-trigger.yaml
 echo "✓ Tekton Triggers deployed"
 
 echo ""
-echo "Step 6: Waiting for EventListener to be ready..."
+echo "Step 7: Waiting for EventListener to be ready..."
 sleep 10
 wait_for_resource eventlistener s3-model-update-listener $NAMESPACE 120
 
 echo ""
-echo "Step 7: Getting webhook URL..."
+echo "Step 8: Getting webhook URL..."
 sleep 5
 WEBHOOK_URL=$(oc get route s3-model-trigger-webhook -n $NAMESPACE -o jsonpath='{.spec.host}' 2>/dev/null || echo "not-ready")
 
@@ -204,7 +209,7 @@ else
 fi
 
 echo ""
-echo "Step 8: Ensuring InferenceService exists (using cat-dog-detect data connection)..."
+echo "Step 9: Ensuring InferenceService exists (using cat-dog-detect data connection)..."
 if ! resource_exists inferenceservice ${MODEL_NAME} $NAMESPACE; then
     echo "Creating InferenceService '${MODEL_NAME}' in namespace '${NAMESPACE}'"
     cat <<EOF | oc apply -f -
@@ -241,7 +246,7 @@ echo "Waiting for InferenceService to be ready..."
 oc wait --for=condition=PredictorReady inferenceservice/${MODEL_NAME} -n ${NAMESPACE} --timeout=300s || echo "Timeout waiting for predictor"
 
 echo ""
-echo "Step 9: Testing model deployment (optional)..."
+echo "Step 10: Testing model deployment (optional)..."
 read -p "Do you want to trigger a test deployment now? (y/N): " -n 1 -r
 echo
 
