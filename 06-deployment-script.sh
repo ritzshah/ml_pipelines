@@ -73,6 +73,12 @@ else
     echo "✓ Secret 'cats-and-dogs' exists"
 fi
 
+echo "Registering 'cats-and-dogs' as an OpenShift AI S3 data connection..."
+# Label and annotate the secret so it appears as a Data Connection in RHOAI UI and is usable by ModelMesh
+oc label secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/connection-type=s3 opendatahub.io/managed=true --overwrite || true
+oc annotate secret cats-and-dogs -n ${NAMESPACE} opendatahub.io/display-name="Cats and Dogs S3" openshift.io/display-name="cats-and-dogs" --overwrite || true
+echo "✓ Data connection metadata applied to secret 'cats-and-dogs'"
+
 # Check if Tekton is installed
 if ! oc api-resources | grep -q tekton.dev; then
     echo "Error: Tekton is not installed on this cluster!"
@@ -150,7 +156,7 @@ else
 fi
 
 echo ""
-echo "Step 8: Ensuring InferenceService exists (using cats-and-dogs secret)..."
+echo "Step 8: Ensuring InferenceService exists (using cats-and-dogs data connection)..."
 if ! resource_exists inferenceservice ${MODEL_NAME} $NAMESPACE; then
     echo "Creating InferenceService '${MODEL_NAME}' in namespace '${NAMESPACE}'"
     cat <<EOF | oc apply -f -
