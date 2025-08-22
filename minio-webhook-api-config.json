@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "*"
+      },
+      "Action": "s3:GetBucketNotification",
+      "Resource": "arn:aws:s3:::pipeline-artifacts"
+    },
+    {
+      "Effect": "Allow", 
+      "Principal": {
+        "AWS": "*"
+      },
+      "Action": "s3:PutBucketNotification",
+      "Resource": "arn:aws:s3:::pipeline-artifacts"
+    }
+  ]
+}
