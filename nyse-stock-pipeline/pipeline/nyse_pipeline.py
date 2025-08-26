@@ -116,8 +116,8 @@ def nyse_pipeline(
             model_name="nyse_lstm",
         )
 
-    # Mount PVC on each task
+    # Mount PVC on each task (KFP v2 style)
     for t in [dl, fe, lstm, arima, select]:
-        t.apply(kubernetes.use_pvc(pvc_name=pvc_name, mount_path=PVC_MOUNT_PATH))
+        kubernetes.use_pvc(task=t, pvc_name=pvc_name, mount_path=PVC_MOUNT_PATH)
 
 
