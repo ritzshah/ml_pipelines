@@ -1,0 +1,2 @@
+openvino-dev>=2024.0
+
